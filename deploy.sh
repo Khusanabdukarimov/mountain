@@ -28,7 +28,7 @@ BACKEND_DIR="$REPO_DIR/backend"
 FRONTEND_DIR="$REPO_DIR/frontend/app"
 SYNC_DIR="$REPO_DIR/bitrix-sync"
 VENV_PIP="$BACKEND_DIR/venv/bin/pip"
-SERVICE="thompsonschool"
+SERVICE="mountain"
 SYNC_SERVICE="bitrix-sync"
 BRANCH="main"
 
