@@ -791,8 +791,9 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all"):
                 result["target"]["cancelled"][idx] += int(cnt)
 
         # ── DEAL metrics ──────────────────────────────────────────────
+        # deals.lead_id → leads.utm_campaign orqali targetolog filter
         deal_params: dict = {"since": since, "until": until, "src": TARGET_SRC}
-        deal_campaign_filter = _build_campaign_filter("d", deal_params)
+        deal_campaign_filter = _build_campaign_filter("l_deal", deal_params)
 
         deal_sql = _text(f"""
             SELECT
@@ -803,6 +804,7 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all"):
                 COALESCE(d.opportunity, 0) AS opp
             FROM deals d
             LEFT JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal'
+            LEFT JOIN leads l_deal ON l_deal.id = d.lead_id
             WHERE d.date_create::date BETWEEN :since AND :until
               AND d.source_id = :src
               {deal_campaign_filter}
