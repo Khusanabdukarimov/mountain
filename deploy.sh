@@ -110,7 +110,7 @@ ALL_OK=true
 
 # ─── Server pull ──────────────────────────────────────────────────────────────
 info "Server git pull..."
-remote "cd $REPO_DIR && git fetch origin $BRANCH && git reset --hard origin/$BRANCH" \
+remote "cd $REPO_DIR && git remote set-url origin git@github.com:Khusanabdukarimov/mountain.git && git fetch origin $BRANCH && git reset --hard origin/$BRANCH" \
     | tail -1
 ok "  Code updated"
 echo
