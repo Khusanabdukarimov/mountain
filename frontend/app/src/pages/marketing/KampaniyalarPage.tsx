@@ -7,7 +7,7 @@ import { Skeleton } from "@/components/Skeleton";
 import {
   getMetaInsights, getMetaCampaigns, getCampaignForms, getFormLeads,
   getPageForms, getKunlikHisobot, getCampaignCreatives, getCreativeLeads, getCreativeDeals,
-  getActiveCampaignNames, getCampaignFormStats, MONTH_KEYS,
+  getActiveCampaignNames, getCampaignFormStats, getCampaignAssignments, MONTH_KEYS,
 } from "@/lib/api/meta";
 import type { MonthKey, PageForm } from "@/lib/api/meta";
 import { fmtNum } from "@/lib/utils";
@@ -304,10 +304,11 @@ export default function KampaniyalarPage() {
   const [expandedForm, setExpandedForm]   = useState<string | null>(null);
   const [expandedCamp, setExpandedCamp]   = useState<string | null>(null);
   const [refreshing, setRefreshing]       = useState(false);
+  const [filterTargetologs, setFilterTargetologs] = useState<string[]>([]);
   const [filterCampaigns, setFilterCampaigns] = useState<string[]>([]);
   const [filterPlatforms, setFilterPlatforms] = useState<string[]>([]);
   const [filterForm,      setFilterForm]      = useState("");
-  const [filterAdset,     setFilterAdset]     = useState("");
+  const [filterAdsets,    setFilterAdsets]    = useState<string[]>([]);
   const [filterCreatives, setFilterCreatives] = useState<string[]>([]);
   const [expandedCreative, setExpandedCreative] = useState<string | null>(null);
   const [expandedSotuv,   setExpandedSotuv]   = useState<string | null>(null);
@@ -324,13 +325,42 @@ export default function KampaniyalarPage() {
   const pageFormsQ       = useQuery({ queryKey: ["page-forms", month, year, fromDate, toDate], queryFn: () => getPageForms(month, year, fromDate, toDate), staleTime: 30_000, refetchInterval: AUTO_REFRESH });
   const kunlikQ          = useQuery({ queryKey: ["kunlik-hisobot",  month, year],                   queryFn: () => getKunlikHisobot(month, year),                                      staleTime: 60_000, refetchInterval: AUTO_REFRESH });
   const creativesQ       = useQuery({ queryKey: ["creatives",       month, year, fromDate, toDate, sotuvFrom, sotuvTo], queryFn: () => getCampaignCreatives(month, year, fromDate, toDate, sotuvFrom || undefined, sotuvTo || undefined), staleTime: 30_000, refetchInterval: AUTO_REFRESH });
-  const activeCampNamesQ = useQuery({ queryKey: ["active-campaign-names"],                          queryFn: getActiveCampaignNames,                                                   staleTime: 5 * 60_000 });
-  const formStatsQ       = useQuery({ queryKey: ["campaign-form-stats", fromDate, toDate],          queryFn: () => getCampaignFormStats(fromDate, toDate),                             staleTime: 60_000, refetchInterval: AUTO_REFRESH });
+  const activeCampNamesQ  = useQuery({ queryKey: ["active-campaign-names"],                          queryFn: getActiveCampaignNames,                                                   staleTime: 5 * 60_000 });
+  const formStatsQ        = useQuery({ queryKey: ["campaign-form-stats", fromDate, toDate],          queryFn: () => getCampaignFormStats(fromDate, toDate),                             staleTime: 60_000, refetchInterval: AUTO_REFRESH });
+  const assignmentsQ      = useQuery({ queryKey: ["campaign-assignments"],                           queryFn: getCampaignAssignments,                                                   staleTime: 5 * 60_000 });
 
   const allRows = campaignsQ.data?.rows ?? [];
 
+  // ── targetolog → campaign mapping ──────────────────────────────────────────
+  const targetologMap = useMemo(() => {
+    const m = new Map<string, string>(); // campaign_name → targetolog
+    for (const a of assignmentsQ.data ?? []) {
+      if (a.targetolog) m.set(a.campaign_name, a.targetolog);
+    }
+    return m;
+  }, [assignmentsQ.data]);
+
+  const optTargetologs = useMemo(() => {
+    const set = new Set<string>();
+    for (const v of targetologMap.values()) set.add(v);
+    return [...set].sort();
+  }, [targetologMap]);
+
+  const targetologCampSet = useMemo(() => {
+    if (filterTargetologs.length === 0) return null;
+    const set = new Set<string>();
+    for (const [camp, targ] of targetologMap) {
+      if (filterTargetologs.includes(targ)) set.add(camp);
+    }
+    return set;
+  }, [targetologMap, filterTargetologs]);
+
   // ── filter options (unique values) ─────────────────────────────────────────
-  const optCampaigns = useMemo(() => [...new Set(allRows.map(r => r.campaign_name))].sort(), [allRows]);
+  const optCampaigns = useMemo(() => [...new Set(
+    allRows
+      .filter(r => !targetologCampSet || targetologCampSet.has(r.campaign_name))
+      .map(r => r.campaign_name)
+  )].sort(), [allRows, targetologCampSet]);
 
   // Sub-filter hierarchy: Campaign → Platform → Adset
   const optPlatforms = useMemo(() => [...new Set(allRows
@@ -339,10 +369,11 @@ export default function KampaniyalarPage() {
   )].sort(), [allRows, filterCampaigns]);
 
   const optAdsets = useMemo(() => [...new Set(allRows
+    .filter(r => !targetologCampSet || targetologCampSet.has(r.campaign_name))
     .filter(r => filterCampaigns.length === 0 || filterCampaigns.includes(r.campaign_name))
     .filter(r => filterPlatforms.length === 0  || filterPlatforms.includes(r.platform))
     .map(r => r.adset_name)
-  )].sort(), [allRows, filterCampaigns, filterPlatforms]);
+  )].sort(), [allRows, targetologCampSet, filterCampaigns, filterPlatforms]);
 
   const optForms = useMemo(() => {
     const names: string[] = [];
@@ -359,12 +390,13 @@ export default function KampaniyalarPage() {
     const creatives = creativesQ.data?.creatives ?? [];
     return [...new Set(
       creatives
+        .filter(r => !targetologCampSet || targetologCampSet.has(r.campaign_name))
         .filter(r => filterCampaigns.length === 0 || filterCampaigns.includes(r.campaign_name))
-        .filter(r => !filterAdset || r.adset_name === filterAdset)
+        .filter(r => filterAdsets.length === 0 || filterAdsets.includes(r.adset_name))
         .map(r => r.ad_name)
         .filter(Boolean) as string[]
     )].sort();
-  }, [creativesQ.data, filterCampaigns, filterAdset]);
+  }, [creativesQ.data, targetologCampSet, filterCampaigns, filterAdsets]);
 
   // Adset names linked to the selected Forma (campaign-forms tells us which
   // adsets feed each lead form), so the Forma filter can reach rows/creatives
@@ -392,20 +424,18 @@ export default function KampaniyalarPage() {
     return set;
   }, [creativesQ.data, filterCreatives]);
 
-  // ── filtered rows (apply campaign / platform / adset / forma / creative) ───
-  // NOTE: rows come from meta_ad_daily (date-range mode), which only stores
-  // adset-level granularity — ad_name is always empty here, so Forma/Creative
-  // filters are applied indirectly via their associated adset_name(s).
+  // ── filtered rows (apply targetolog / campaign / platform / adset / forma / creative) ───
   const rows = useMemo(() => allRows
+    .filter(r => !targetologCampSet || targetologCampSet.has(r.campaign_name))
     .filter(r => filterCampaigns.length === 0 || filterCampaigns.includes(r.campaign_name))
     .filter(r => filterPlatforms.length === 0  || filterPlatforms.includes(r.platform))
-    .filter(r => !filterAdset || r.adset_name === filterAdset)
+    .filter(r => filterAdsets.length === 0 || filterAdsets.includes(r.adset_name))
     .filter(r => !formAdsetNames || formAdsetNames.has(r.adset_name))
     .filter(r => !creativeAdsetNames || creativeAdsetNames.has(r.adset_name)),
-  [allRows, filterCampaigns, filterPlatforms, filterAdset, formAdsetNames, creativeAdsetNames]);
+  [allRows, targetologCampSet, filterCampaigns, filterPlatforms, filterAdsets, formAdsetNames, creativeAdsetNames]);
 
   // ── aggregate KPIs from filtered rows (date-range + filter aware) ────────────
-  const isFiltered = !!(filterCampaigns.length || filterPlatforms.length || filterAdset || filterForm || filterCreatives.length);
+  const isFiltered = !!(filterTargetologs.length || filterCampaigns.length || filterPlatforms.length || filterAdsets.length || filterForm || filterCreatives.length);
 
   const totalSpend  = rows.reduce((a, r) => a + r.spend,       0);
   const totalClicks = rows.reduce((a, r) => a + r.clicks,      0);
@@ -489,12 +519,13 @@ export default function KampaniyalarPage() {
       for (const f of camp.forms) {
         if (filterForm && f.form_name !== filterForm) continue;
         if (!f.adset_name) continue;
+        if (filterAdsets.length > 0 && !filterAdsets.includes(f.adset_name)) continue;
         if (!formAdsets.has(f.form_id)) formAdsets.set(f.form_id, new Set());
         formAdsets.get(f.form_id)!.add(f.adset_name);
       }
     }
     return formAdsets;
-  }, [formsQ.data, filterCampaigns, filterForm]);
+  }, [formsQ.data, filterCampaigns, filterForm, filterAdsets]);
 
   const formDbStatsMap = useMemo(() => {
     const creatives = creativesQ.data?.creatives ?? [];
@@ -531,11 +562,12 @@ export default function KampaniyalarPage() {
   // run on both Facebook + Instagram placements at once).
   const filteredCreativesForKpi = useMemo(
     () => (creativesQ.data?.creatives ?? [])
+      .filter(r => !targetologCampSet || targetologCampSet.has(r.campaign_name))
       .filter(r => filterCampaigns.length === 0 || filterCampaigns.includes(r.campaign_name))
-      .filter(r => !filterAdset || r.adset_name === filterAdset)
+      .filter(r => filterAdsets.length === 0 || filterAdsets.includes(r.adset_name))
       .filter(r => filterCreatives.length === 0 || filterCreatives.includes(r.ad_name ?? ""))
       .filter(r => !formAdsetNames || formAdsetNames.has(r.adset_name)),
-    [creativesQ.data, filterCampaigns, filterAdset, filterCreatives, formAdsetNames],
+    [creativesQ.data, targetologCampSet, filterCampaigns, filterAdsets, filterCreatives, formAdsetNames],
   );
 
   const pendingLeads = useMemo(
@@ -590,9 +622,9 @@ export default function KampaniyalarPage() {
 
       {/* ── Filter panel ─────────────────────────────────────────────────────── */}
       {(() => {
-        const hasExtra = !!(filterCampaigns.length || filterPlatforms.length || filterForm || filterAdset || filterCreatives.length);
+        const hasExtra = !!(filterTargetologs.length || filterCampaigns.length || filterPlatforms.length || filterForm || filterAdsets.length || filterCreatives.length);
         const selStyle: React.CSSProperties = { width: "100%", padding: "8px 10px", fontSize: 12, background: "var(--bg3)", border: "1px solid var(--border)", color: "var(--text)", borderRadius: 8 };
-        const clearAll = () => { setFilterCampaigns([]); setFilterPlatforms([]); setFilterForm(""); setFilterAdset(""); setFilterCreatives([]); setSotuvFrom(""); setSotuvTo(""); setFromDate(getFirstOfMonth()); setToDate(getTodayIso()); };
+        const clearAll = () => { setFilterTargetologs([]); setFilterCampaigns([]); setFilterPlatforms([]); setFilterForm(""); setFilterAdsets([]); setFilterCreatives([]); setSotuvFrom(""); setSotuvTo(""); setFromDate(getFirstOfMonth()); setToDate(getTodayIso()); };
         return (
           <div style={{ background: "var(--bg2)", borderBottom: "1px solid var(--border)", overflow: filterOpen ? "visible" : "hidden", position: "sticky", top: 0, zIndex: 10 }}>
             <div style={{ padding: "10px 20px", display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}
@@ -659,11 +691,13 @@ export default function KampaniyalarPage() {
 
                 {/* Multi-select filters row 1 */}
                 <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
+                  <MultiSelect label="Targetolog" options={optTargetologs} values={filterTargetologs}
+                    onChange={v => { setFilterTargetologs(v); setFilterCampaigns([]); setFilterPlatforms([]); setFilterAdsets([]); setFilterForm(""); setFilterCreatives([]); }} />
                   <MultiSelect label="Kampaniya" options={optCampaigns} values={filterCampaigns}
-                    onChange={v => { setFilterCampaigns(v); setFilterPlatforms([]); setFilterAdset(""); setFilterForm(""); setFilterCreatives([]); }} />
+                    onChange={v => { setFilterCampaigns(v); setFilterPlatforms([]); setFilterAdsets([]); setFilterForm(""); setFilterCreatives([]); }} />
                   <MultiSelect label="Platforma" options={optPlatforms.map(p => p === "facebook" ? "Facebook" : "Instagram")}
                     values={filterPlatforms.map(p => p === "facebook" ? "Facebook" : "Instagram")}
-                    onChange={v => { setFilterPlatforms(v.map(p => p === "Facebook" ? "facebook" : "instagram")); setFilterAdset(""); setFilterCreatives([]); }} />
+                    onChange={v => { setFilterPlatforms(v.map(p => p === "Facebook" ? "facebook" : "instagram")); setFilterAdsets([]); setFilterCreatives([]); }} />
                   <div style={{ flex: "1 1 180px", minWidth: 160 }}>
                     <div style={{ fontSize: 11, color: "var(--text3)", marginBottom: 4 }}>Forma</div>
                     <select value={filterForm} onChange={e => setFilterForm(e.target.value)} style={selStyle}>
@@ -671,13 +705,8 @@ export default function KampaniyalarPage() {
                       {optForms.map(f => <option key={f} value={f}>{f}</option>)}
                     </select>
                   </div>
-                  <div style={{ flex: "1 1 180px", minWidth: 160 }}>
-                    <div style={{ fontSize: 11, color: "var(--text3)", marginBottom: 4 }}>Adset</div>
-                    <select value={filterAdset} onChange={e => { setFilterAdset(e.target.value); setFilterCreatives([]); }} style={selStyle}>
-                      <option value="">Barchasi</option>
-                      {optAdsets.map(a => <option key={a} value={a}>{a}</option>)}
-                    </select>
-                  </div>
+                  <MultiSelect label="Adset" options={optAdsets} values={filterAdsets}
+                    onChange={v => { setFilterAdsets(v); setFilterCreatives([]); }} />
                 </div>
 
                 {/* Creative filter — always visible */}
@@ -1012,8 +1041,9 @@ export default function KampaniyalarPage() {
               {tab === "creative" && (() => {
                 const creatives = creativesQ.data?.creatives ?? [];
                 const filtered = creatives
+                  .filter(r => !targetologCampSet || targetologCampSet.has(r.campaign_name))
                   .filter(r => filterCampaigns.length === 0 || filterCampaigns.includes(r.campaign_name))
-                  .filter(r => !filterAdset    || r.adset_name === filterAdset)
+                  .filter(r => filterAdsets.length === 0 || filterAdsets.includes(r.adset_name))
                   .filter(r => filterCreatives.length === 0  || filterCreatives.includes(r.ad_name ?? ""));
 
                 const agg = (rows: typeof filtered) => ({
