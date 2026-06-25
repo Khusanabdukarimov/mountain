@@ -499,13 +499,17 @@ export default function KampaniyalarPage() {
       .filter(f => !search || f.form_name.toLowerCase().includes(search.toLowerCase()))
       .filter(f => !filterForm || f.form_name === filterForm)
       .filter(f => {
+        const camps = formsQ.data?.campaigns ?? [];
+        if (targetologCampSet) {
+          if (!camps.some(c => targetologCampSet.has(c.campaign_name) && c.forms.some(cf => cf.form_id === f.form_id))) return false;
+        }
         if (filterCampaigns.length === 0) return true;
-        return (formsQ.data?.campaigns ?? []).some(c =>
+        return camps.some(c =>
           filterCampaigns.includes(c.campaign_name) && c.forms.some(cf => cf.form_id === f.form_id)
         );
       })
       .sort((a, b) => (b.leads_count ?? 0) - (a.leads_count ?? 0));
-  }, [formsQ.data, pageFormsQ.data, search, filterForm, filterCampaigns]);
+  }, [formsQ.data, pageFormsQ.data, search, filterForm, filterCampaigns, targetologCampSet]);
 
   // DB-verified (leads, sifatli) per form_id — used by the Formalar/Lidlar
   // tabs so the per-form table matches the top KPI cards' methodology
