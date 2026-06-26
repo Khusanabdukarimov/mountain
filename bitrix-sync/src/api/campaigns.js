@@ -303,8 +303,8 @@ router.get('/form-stats', async (req, res) => {
       LEFT JOIN leads le ON le.id = lp.lead_id
       LEFT JOIN stages s  ON s.id  = le.stage_id
       WHERE fl.campaign_name IS NOT NULL
-        ${from ? `AND fl.created_time >= $1` : ''}
-        ${to   ? `AND fl.created_time <  ${ from ? '$2' : '$1' }::date + interval '1 day'` : ''}
+        ${from ? `AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date >= $1::date` : ''}
+        ${to   ? `AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date <= ${ from ? '$2' : '$1' }::date` : ''}
       GROUP BY fl.campaign_name
       ORDER BY jami_lid DESC
     `, [from, to].filter(Boolean));
@@ -671,8 +671,8 @@ router.get('/forms', async (req, res) => {
       LEFT JOIN leads  l ON l.id = lp.lead_id
       LEFT JOIN stages s ON s.id = l.stage_id
       WHERE fl.form_id IS NOT NULL
-        AND fl.created_time >= $1::date
-        AND fl.created_time <  ($2::date + INTERVAL '1 day')
+        AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date >= $1::date
+        AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date <= $2::date
       GROUP BY fl.form_id
     `, [since, until, SIFATLI_STAGES]);
     const sifatliMap = {};
@@ -906,8 +906,8 @@ router.get('/leads', async (req, res) => {
       LEFT JOIN stages s ON s.id = l.stage_id
       WHERE fl.form_id = $1
         AND ($2::text IS NULL OR fl.campaign_id = $2)
-        AND ($3::date IS NULL OR fl.created_time >= $3::date)
-        AND ($4::date IS NULL OR fl.created_time < ($4::date + INTERVAL '1 day'))
+        AND ($3::date IS NULL OR (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date >= $3::date)
+        AND ($4::date IS NULL OR (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date <= $4::date)
       ORDER BY fl.created_time DESC, l.id DESC
       LIMIT 1000
     `, [form_id, campaign_id || null, from || null, to || null]);
@@ -1008,8 +1008,8 @@ router.get('/creatives', async (req, res) => {
          = RIGHT(REGEXP_REPLACE(fl.phone,  '[^0-9]', '', 'g'), 9)
       LEFT JOIN deals  d  ON d.id = dp.deal_id
       LEFT JOIN stages ds ON ds.id = d.stage_id
-      WHERE fl.created_time >= $1::date
-        AND fl.created_time <  ($2::date + INTERVAL '1 day')
+      WHERE (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date >= $1::date
+        AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date <= $2::date
       GROUP BY fl.adset_name, fl.campaign_name
       ORDER BY meta_leads DESC
     `, [since, until, sotuvFrom, sotuvTo]);
@@ -1157,8 +1157,8 @@ router.get('/creative-deals', async (req, res) => {
           JOIN stages ds ON ds.id = d.stage_id AND ds.is_won = true
           LEFT JOIN stages s ON s.id = d.stage_id
           LEFT JOIN responsibles r ON r.id = d.responsible_id
-          WHERE fl.created_time >= $1::date
-            AND fl.created_time <  ($2::date + INTERVAL '1 day')
+          WHERE (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date >= $1::date
+            AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date <= $2::date
             AND d.uf_bp_sale_date >= $3::date
             AND d.uf_bp_sale_date <= $4::date
             ${adset_name ? "AND fl.adset_name = $5" : "AND fl.campaign_name = $5"}
@@ -1233,8 +1233,8 @@ router.get('/creative-leads', async (req, res) => {
          = RIGHT(REGEXP_REPLACE(fl.phone, '[^0-9]', '', 'g'), 9)
       LEFT JOIN deals d ON d.id = dp2.deal_id
       WHERE fl.adset_name = $1
-        AND fl.created_time >= $2::date
-        AND fl.created_time <  ($3::date + INTERVAL '1 day')
+        AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date >= $2::date
+        AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date <= $3::date
       GROUP BY fl.id, fl.full_name, fl.phone, fl.created_time, fl.platform, fl.campaign_name,
                l.id, s.name, s.bitrix_id, dp.last9
       ORDER BY fl.created_time DESC
