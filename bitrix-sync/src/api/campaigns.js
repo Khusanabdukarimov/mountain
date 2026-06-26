@@ -636,13 +636,18 @@ router.get('/forms', async (req, res) => {
           forms: {},
         };
       }
-      // Keep latest adset info (last writer wins; all rows for same campaign/form are same adset)
-      campaignMap[r.campaign_id].forms[r.form_id] = {
-        form_id:     r.form_id,
-        adset_id:    r.adset_id || '',
-        adset_name:  r.adset_name || '',
-        month_leads: r.month_leads,
-      };
+      if (!campaignMap[r.campaign_id].forms[r.form_id]) {
+        campaignMap[r.campaign_id].forms[r.form_id] = {
+          form_id:     r.form_id,
+          adset_ids:   [],
+          adset_names: [],
+          month_leads: 0,
+        };
+      }
+      const entry = campaignMap[r.campaign_id].forms[r.form_id];
+      if (r.adset_id)   entry.adset_ids.push(r.adset_id);
+      if (r.adset_name) entry.adset_names.push(r.adset_name);
+      entry.month_leads += r.month_leads;
     }
 
     // ── 2b. Sifatli lid count per form ──
@@ -703,8 +708,9 @@ router.get('/forms', async (req, res) => {
           leads_count:  info.month_leads,
           sifatli_lid:  sifatliMap[fid] ?? 0,
           created_time: fd.created_time || '',
-          adset_id:     info.adset_id,
-          adset_name:   info.adset_name,
+          adset_id:     (info.adset_ids || [])[0] || '',
+          adset_name:   (info.adset_names || [])[0] || '',
+          adset_names:  info.adset_names || [],
         });
       }
       if (formsList.length === 0) continue;

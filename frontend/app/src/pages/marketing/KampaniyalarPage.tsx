@@ -522,10 +522,12 @@ export default function KampaniyalarPage() {
       if (filterCampaigns.length > 0 && !filterCampaigns.includes(camp.campaign_name)) continue;
       for (const f of camp.forms) {
         if (filterForm && f.form_name !== filterForm) continue;
-        if (!f.adset_name) continue;
-        if (filterAdsets.length > 0 && !filterAdsets.includes(f.adset_name)) continue;
+        // Collect all adsets this form uses (API returns adset_names[] when form spans multiple adsets)
+        const names: string[] = (f as any).adset_names?.length ? (f as any).adset_names : f.adset_name ? [f.adset_name] : [];
+        const filtered = filterAdsets.length > 0 ? names.filter(n => filterAdsets.includes(n)) : names;
+        if (filtered.length === 0) continue;
         if (!formAdsets.has(f.form_id)) formAdsets.set(f.form_id, new Set());
-        formAdsets.get(f.form_id)!.add(f.adset_name);
+        for (const n of filtered) formAdsets.get(f.form_id)!.add(n);
       }
     }
     return formAdsets;
