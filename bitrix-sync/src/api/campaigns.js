@@ -289,6 +289,34 @@ router.get('/form-stats', async (req, res) => {
   const to   = req.query.to   || null;
   try {
     const { rows } = await pool.query(`
+      WITH real_sotuv AS (
+        -- Path A: deals -> lead_id -> leads -> utm_campaign
+        SELECT le.utm_campaign AS campaign_name, COUNT(DISTINCT d.id) AS cnt
+        FROM deals d
+        JOIN leads le ON le.id = d.lead_id
+        JOIN stages ds ON ds.id = d.stage_id AND ds.is_won = true
+        WHERE le.utm_campaign IS NOT NULL
+          ${from ? `AND d.uf_bp_sale_date >= $1::date` : ''}
+          ${to   ? `AND d.uf_bp_sale_date <= ${ from ? '$2' : '$1' }::date` : ''}
+        GROUP BY le.utm_campaign
+        UNION ALL
+        -- Path B: deals -> deal_phones -> facebook_leads (no lead_id to avoid double-count)
+        SELECT fl.campaign_name, COUNT(DISTINCT d.id) AS cnt
+        FROM deals d
+        JOIN deal_phones dp ON dp.deal_id = d.id
+        JOIN facebook_leads fl ON RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9) = RIGHT(REGEXP_REPLACE(dp.phone,'[^0-9]','','g'),9)
+        JOIN stages ds ON ds.id = d.stage_id AND ds.is_won = true
+        WHERE d.lead_id IS NULL
+          AND fl.campaign_name IS NOT NULL
+          ${from ? `AND d.uf_bp_sale_date >= $1::date` : ''}
+          ${to   ? `AND d.uf_bp_sale_date <= ${ from ? '$2' : '$1' }::date` : ''}
+        GROUP BY fl.campaign_name
+      ),
+      sotuv_by_campaign AS (
+        SELECT campaign_name, SUM(cnt)::int AS sotuv_boldi
+        FROM real_sotuv
+        GROUP BY campaign_name
+      )
       SELECT
         fl.campaign_name,
         COUNT(DISTINCT fl.id)::int                                                                                        AS jami_lid,
@@ -297,15 +325,16 @@ router.get('/form-stats', async (req, res) => {
         COUNT(DISTINCT CASE WHEN le.id IS NOT NULL AND s.bitrix_id NOT IN ('JUNK','UC_F8K4GI','UC_NAZK5J') THEN fl.id END)::int AS sifatli,
         COUNT(DISTINCT CASE WHEN s.bitrix_id = 'UC_F8K4GI' THEN fl.id END)::int                                         AS sifatsiz,
         COUNT(DISTINCT CASE WHEN s.bitrix_id = 'UC_NAZK5J' THEN fl.id END)::int                                         AS bekor_boldi,
-        COUNT(DISTINCT CASE WHEN s.is_won = true OR s.bitrix_id IN ('UC_NV0Y4F','WON','C1:WON') THEN fl.id END)::int    AS sotuv_boldi
+        COALESCE(sc.sotuv_boldi, 0)::int                                                                                 AS sotuv_boldi
       FROM facebook_leads fl
       LEFT JOIN lead_phones lp ON RIGHT(REGEXP_REPLACE(lp.phone,'[^0-9]','','g'),9) = RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9)
       LEFT JOIN leads le ON le.id = lp.lead_id
       LEFT JOIN stages s  ON s.id  = le.stage_id
+      LEFT JOIN sotuv_by_campaign sc ON sc.campaign_name = fl.campaign_name
       WHERE fl.campaign_name IS NOT NULL
         ${from ? `AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date >= $1::date` : ''}
         ${to   ? `AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date <= ${ from ? '$2' : '$1' }::date` : ''}
-      GROUP BY fl.campaign_name
+      GROUP BY fl.campaign_name, sc.sotuv_boldi
       ORDER BY jami_lid DESC
     `, [from, to].filter(Boolean));
     res.json({ rows });
