@@ -266,13 +266,13 @@ function buildInsights(rawRows, monthKey, year) {
 
 // ── Routes ─────────────────────────────────────────────────────
 
-// GET /api/campaigns/active-names — campaigns with data on the most recent date in the DB
+// GET /api/campaigns/active-names — campaigns with spend in the last 7 days
 router.get('/active-names', async (req, res) => {
   try {
     const { rows } = await pool.query(`
       SELECT DISTINCT campaign_name
       FROM meta_ad_daily
-      WHERE date = (SELECT MAX(date) FROM meta_ad_daily)
+      WHERE date >= (SELECT MAX(date) FROM meta_ad_daily) - INTERVAL '7 days'
         AND spend > 0
       ORDER BY campaign_name
     `);
