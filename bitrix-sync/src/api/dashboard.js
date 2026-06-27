@@ -656,15 +656,23 @@ router.get('/deals-list', async (req, res) => {
 });
 
 router.get('/deals-conversion', async (req, res) => {
-  const { from, to, mode } = req.query;
+  const { from, to, mode, responsible_id, stage_id, source } = req.query;
+  const extra = [];
+  const params = [from || null, to || null];
+  let pi = 3;
+  if (responsible_id) { extra.push(`AND d.responsible_id::text = ANY(string_to_array($${pi++}, ','))`); params.push(responsible_id); }
+  if (stage_id)       { extra.push(`AND d.stage_id::text = ANY(string_to_array($${pi++}, ','))`);       params.push(stage_id); }
+  if (source)         { extra.push(`AND ${dealSrcCond(mode, pi++)}`);                                    params.push(source); }
   try {
     const { rows } = await pool.query(
       `WITH fd AS (
          SELECT d.id, d.responsible_id, d.opportunity, d.currency_id, s.is_won, s.is_final, s.bitrix_id AS stage_bid
          FROM deals d
          JOIN stages s ON s.id = d.stage_id
+         LEFT JOIN LATERAL (SELECT phone FROM deal_phones WHERE deal_id = d.id LIMIT 1) ph ON true
          WHERE ${dealDateCond(mode, 1, 2)}
            ${dealModeClause(mode)}
+           ${extra.join(' ')}
        )
        SELECT
          r.id AS responsible_id,
@@ -680,7 +688,7 @@ router.get('/deals-conversion', async (req, res) => {
        GROUP BY r.id, r.name, r.last_name, r.work_position
        HAVING COUNT(fd.id) > 0
        ORDER BY total DESC`,
-      [from || null, to || null]
+      params
     );
     res.json(rows);
   } catch (err) {
@@ -694,15 +702,23 @@ router.get('/deals-conversion', async (req, res) => {
  * Per-responsible deal counts broken down by actual deal stages.
  */
 router.get('/deals-responsibles', async (req, res) => {
-  const { from, to, mode } = req.query;
+  const { from, to, mode, responsible_id, stage_id, source } = req.query;
+  const extra = [];
+  const params = [from || null, to || null];
+  let pi = 3;
+  if (responsible_id) { extra.push(`AND d.responsible_id::text = ANY(string_to_array($${pi++}, ','))`); params.push(responsible_id); }
+  if (stage_id)       { extra.push(`AND d.stage_id::text = ANY(string_to_array($${pi++}, ','))`);       params.push(stage_id); }
+  if (source)         { extra.push(`AND ${dealSrcCond(mode, pi++)}`);                                    params.push(source); }
   try {
     const { rows } = await pool.query(
       `WITH fd AS (
          SELECT d.id, d.responsible_id, s.bitrix_id AS stage_bid, s.is_won, s.is_final
          FROM deals d
          JOIN stages s ON s.id = d.stage_id
+         LEFT JOIN LATERAL (SELECT phone FROM deal_phones WHERE deal_id = d.id LIMIT 1) ph ON true
          WHERE ${dealDateCond(mode, 1, 2)}
            ${dealModeClause(mode)}
+           ${extra.join(' ')}
        )
        SELECT
          r.id AS responsible_id,
@@ -719,7 +735,7 @@ router.get('/deals-responsibles', async (req, res) => {
        GROUP BY r.id, r.name, r.last_name, r.work_position
        HAVING COUNT(fd.id) > 0
        ORDER BY total DESC`,
-      [from || null, to || null]
+      params
     );
     res.json(rows);
   } catch (err) {
@@ -2593,7 +2609,13 @@ router.get('/responsible-leads', async (req, res) => {
  * Deal counts grouped by source — umumiy, jarayonda, bekor bo'ldi, sotuv bo'ldi.
  */
 router.get('/deals-source-stats', async (req, res) => {
-  const { from, to, mode } = req.query;
+  const { from, to, mode, responsible_id, stage_id, source } = req.query;
+  const extra = [];
+  const params = [from || null, to || null];
+  let pi = 3;
+  if (responsible_id) { extra.push(`AND d.responsible_id::text = ANY(string_to_array($${pi++}, ','))`); params.push(responsible_id); }
+  if (stage_id)       { extra.push(`AND d.stage_id::text = ANY(string_to_array($${pi++}, ','))`);       params.push(stage_id); }
+  if (source)         { extra.push(`AND ${dealSrcCond(mode, pi++)}`);                                    params.push(source); }
   try {
     const { rows } = await pool.query(
       `SELECT
@@ -2604,11 +2626,13 @@ router.get('/deals-source-stats', async (req, res) => {
          COUNT(d.id) FILTER (WHERE s.is_won = true)::int AS sotuv_boldi
        FROM deals d
        JOIN stages s ON s.id = d.stage_id
+       LEFT JOIN LATERAL (SELECT phone FROM deal_phones WHERE deal_id = d.id LIMIT 1) ph ON true
        WHERE ${dealDateCond(mode, 1, 2)}
          ${dealModeClause(mode)}
+         ${extra.join(' ')}
        GROUP BY d.source_id
        ORDER BY umumiy DESC`,
-      [from || null, to || null]
+      params
     );
     const result = rows.map(r => ({
       ...r,

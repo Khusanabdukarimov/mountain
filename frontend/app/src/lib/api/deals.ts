@@ -143,11 +143,11 @@ export type DealsResponsiblesRow = {
   bekor_boldi: number;
 };
 
-export function getDealsConversion(filter: { from?: string; to?: string; mode?: string }) {
+export function getDealsConversion(filter: { from?: string; to?: string; mode?: string; responsible_id?: string; stage_id?: string; source?: string }) {
   return apiGet<DealsConversionRow[]>('/api/dashboard/deals-conversion', filter as Record<string, string | undefined>, API_URL_CRM);
 }
 
-export function getDealsResponsibles(filter: { from?: string; to?: string; mode?: string }) {
+export function getDealsResponsibles(filter: { from?: string; to?: string; mode?: string; responsible_id?: string; stage_id?: string; source?: string }) {
   return apiGet<DealsResponsiblesRow[]>('/api/dashboard/deals-responsibles', filter as Record<string, string | undefined>, API_URL_CRM);
 }
 
@@ -160,6 +160,6 @@ export type DealSourceStatsRow = {
   sotuv_boldi: number;
 };
 
-export function getDealSourceStats(filter: { from?: string; to?: string; mode?: string }) {
+export function getDealSourceStats(filter: { from?: string; to?: string; mode?: string; responsible_id?: string; stage_id?: string; source?: string }) {
   return apiGet<DealSourceStatsRow[]>('/api/dashboard/deals-source-stats', filter as Record<string, string | undefined>, API_URL_CRM);
 }

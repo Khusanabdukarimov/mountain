@@ -391,19 +391,29 @@ export default function SdelkalarPage() {
   });
 
   const convQ = useQuery({
-    queryKey: ["deals-conversion", apiFrom, apiTo, mode],
-    queryFn: () => getDealsConversion({ from: apiFrom, to: apiTo, mode }),
+    queryKey: ["deals-conversion", apiFrom, apiTo, filter.responsible_ids, filter.stage_ids, filter.sources, mode],
+    queryFn: () => getDealsConversion({
+      from: apiFrom, to: apiTo, mode,
+      responsible_id: filter.responsible_ids.join(',') || undefined,
+      stage_id: filter.stage_ids.join(',') || undefined,
+      source: filter.sources.join(',') || undefined,
+    }),
     staleTime: 60_000,
   });
 
   const respQ = useQuery({
-    queryKey: ["deals-responsibles", apiFrom, apiTo, mode],
-    queryFn: () => getDealsResponsibles({ from: apiFrom, to: apiTo, mode }),
+    queryKey: ["deals-responsibles", apiFrom, apiTo, filter.responsible_ids, filter.stage_ids, filter.sources, mode],
+    queryFn: () => getDealsResponsibles({
+      from: apiFrom, to: apiTo, mode,
+      responsible_id: filter.responsible_ids.join(',') || undefined,
+      stage_id: filter.stage_ids.join(',') || undefined,
+      source: filter.sources.join(',') || undefined,
+    }),
     staleTime: 60_000,
   });
 
   const cancelQ = useQuery({
-    queryKey: ["stats/deal-cancel-reasons", apiFrom, apiTo, filter.responsible_ids, mode],
+    queryKey: ["stats/deal-cancel-reasons", apiFrom, apiTo, filter.responsible_ids, filter.stage_ids, filter.sources, mode],
     queryFn: () => getDealCancelReasons({
       start_date: apiFrom,
       end_date: apiTo,
@@ -413,8 +423,13 @@ export default function SdelkalarPage() {
   });
 
   const sourceStatsQ = useQuery({
-    queryKey: ["deals-source-stats", apiFrom, apiTo, mode],
-    queryFn: () => getDealSourceStats({ from: apiFrom, to: apiTo, mode }),
+    queryKey: ["deals-source-stats", apiFrom, apiTo, filter.responsible_ids, filter.stage_ids, filter.sources, mode],
+    queryFn: () => getDealSourceStats({
+      from: apiFrom, to: apiTo, mode,
+      responsible_id: filter.responsible_ids.join(',') || undefined,
+      stage_id: filter.stage_ids.join(',') || undefined,
+      source: filter.sources.join(',') || undefined,
+    }),
     staleTime: 60_000,
   });
 
