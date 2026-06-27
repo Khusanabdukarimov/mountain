@@ -103,7 +103,7 @@ router.get('/kunlik', async (req, res) => {
       }
     }
 
-    // ── 3. Deal-based metrics: meetings, deals, deals_sum, sales, cancelled ──
+    // ── 3. Deal-based metrics: meetings, sales, cancelled (by date_create) ──
     const dealMetricsRes = await pool.query(`
       SELECT
         EXTRACT(DAY FROM d.date_create AT TIME ZONE 'Asia/Tashkent')::int AS day,
@@ -126,10 +126,6 @@ router.get('/kunlik', async (req, res) => {
       if (row.stage_bid === 'NEW') {
         result.target.meetings[i]++;
       }
-      if (row.stage_bid === 'UC_W35V62') {
-        result.target.deals[i]++;
-        result.target.deals_sum[i] = Math.round((result.target.deals_sum[i] + opp) * 100) / 100;
-      }
       // Sotuv bo'ldi = won deals by date_create
       if (row.is_won) {
         result.target.sales_count[i]++;
@@ -138,6 +134,26 @@ router.get('/kunlik', async (req, res) => {
       if (row.is_final && !row.is_won) {
         result.target.cancelled[i]++;
       }
+    }
+
+    // ── 4. Kelishuvlar: by when deal reached UC_W35V62 stage (stage history) ──
+    const kelishuvRes = await pool.query(`
+      SELECT
+        EXTRACT(DAY FROM dsh.changed_at AT TIME ZONE 'Asia/Tashkent')::int AS day,
+        COALESCE(d.opportunity, 0)::numeric AS opp
+      FROM deal_stage_history dsh
+      JOIN stages s ON s.id = dsh.stage_id AND s.bitrix_id = 'UC_W35V62'
+      JOIN deals d ON d.id = dsh.deal_id AND d.source_id = $3
+      WHERE (dsh.changed_at AT TIME ZONE 'Asia/Tashkent')::date >= $1
+        AND (dsh.changed_at AT TIME ZONE 'Asia/Tashkent')::date <= $2
+    `, [monthStart, monthEnd, TARGET_SRC]);
+
+    for (const row of kelishuvRes.rows) {
+      if (!row.day || row.day < 1 || row.day > daysInMonth) continue;
+      const i   = row.day - 1;
+      const opp = parseFloat(row.opp) || 0;
+      result.target.deals[i]++;
+      result.target.deals_sum[i] = Math.round((result.target.deals_sum[i] + opp) * 100) / 100;
     }
 
     res.json({ month: monthKey, year, data: result });
