@@ -317,8 +317,8 @@ router.get('/form-stats', async (req, res) => {
         JOIN stages ds ON ds.id = d.stage_id AND ds.is_won = true
         WHERE d.lead_id IS NULL
           AND fl.campaign_name IS NOT NULL
-          ${from ? `AND d.uf_bp_sale_date >= $1::date` : ''}
-          ${to   ? `AND d.uf_bp_sale_date <= ${ from ? '$2' : '$1' }::date` : ''}
+          ${from ? `AND COALESCE(d.uf_bp_sale_date, d.date_create) >= $1::date` : ''}
+          ${to   ? `AND COALESCE(d.uf_bp_sale_date, d.date_create) <= ${ from ? '$2' : '$1' }::date` : ''}
         GROUP BY fl.campaign_name
       ),
       sotuv_by_campaign AS (

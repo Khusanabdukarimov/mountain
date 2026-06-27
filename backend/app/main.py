@@ -801,7 +801,8 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all"):
                 s.bitrix_id AS stage_bid,
                 s.is_won,
                 s.is_final,
-                COALESCE(d.opportunity, 0) AS opp
+                COALESCE(d.opportunity, 0) AS opp,
+                COALESCE(d.uf_tolandi_sum, 0) AS tolandi_sum
             FROM deals d
             LEFT JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal'
             LEFT JOIN leads l_deal ON l_deal.id = d.lead_id
@@ -809,16 +810,18 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all"):
               AND d.source_id = :src
               {deal_campaign_filter}
         """)
-        for day, stage_bid, is_won, is_final, opp in conn.execute(deal_sql, deal_params):
+        for day, stage_bid, is_won, is_final, opp, tolandi_sum in conn.execute(deal_sql, deal_params):
             if day is None or day < 1 or day > days_in_month:
                 continue
             idx = int(day) - 1
             opp_f = float(opp)
+            tolandi_f = float(tolandi_sum or 0)
             if stage_bid == "NEW":
                 result["target"]["meetings"][idx] += 1
-            if stage_bid == "UC_W35V62":
+            # Kelishuvlar = UC_W35V62 stage yoki sotuv bo'ldi (won)
+            if stage_bid == "UC_W35V62" or is_won:
                 result["target"]["deals"][idx] += 1
-                result["target"]["deals_sum"][idx] += opp_f
+                result["target"]["deals_sum"][idx] += tolandi_f
             if is_won:
                 result["target"]["sales_count"][idx] += 1
                 result["target"]["sales_sum"][idx] += opp_f
