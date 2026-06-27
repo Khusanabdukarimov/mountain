@@ -28,7 +28,7 @@ async function distributeLead(leadId) {
         COUNT(l.id)::int AS today_count
       FROM responsibles r
       LEFT JOIN leads l ON l.responsible_id = r.id
-        AND l.date_create >= date_trunc('day', NOW() AT TIME ZONE 'Asia/Tashkent')
+        AND l.date_create >= date_trunc('day', NOW() AT TIME ZONE 'Asia/Tashkent') AT TIME ZONE 'Asia/Tashkent'
         AND (l.source_id IS NULL OR l.source_id != 'UC_1WUFJB')
       WHERE r.taqsimot_pct > 0
         AND r.active = TRUE
