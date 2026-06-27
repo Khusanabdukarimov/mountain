@@ -1060,7 +1060,7 @@ router.get('/creatives', async (req, res) => {
       const { rows: sotuvRows } = await pool.query(`
         WITH adset_sotuv AS (
           -- Path A: deal -> lead_id -> leads -> lead_phones -> facebook_leads
-          SELECT COALESCE(fl.adset_name, 'N/A') AS adset_name, COUNT(DISTINCT d.id)::int AS cnt
+          SELECT COALESCE(fl.adset_name, 'N/A') AS adset_name, COALESCE(fl.campaign_name, 'N/A') AS campaign_name, COUNT(DISTINCT d.id)::int AS cnt
           FROM deals d
           JOIN stages ds ON ds.id = d.stage_id AND ds.is_won = true
           JOIN leads le ON le.id = d.lead_id
@@ -1070,10 +1070,10 @@ router.get('/creatives', async (req, res) => {
              = RIGHT(REGEXP_REPLACE(lp.phone,'[^0-9]','','g'),9)
             AND fl.campaign_name = le.utm_campaign
           WHERE d.uf_bp_sale_date >= $1::date AND d.uf_bp_sale_date <= $2::date
-          GROUP BY fl.adset_name
+          GROUP BY fl.adset_name, fl.campaign_name
           UNION ALL
           -- Path B: deal -> deal_phones -> facebook_leads (no lead_id)
-          SELECT COALESCE(fl.adset_name, 'N/A') AS adset_name, COUNT(DISTINCT d.id)::int AS cnt
+          SELECT COALESCE(fl.adset_name, 'N/A') AS adset_name, COALESCE(fl.campaign_name, 'N/A') AS campaign_name, COUNT(DISTINCT d.id)::int AS cnt
           FROM deals d
           JOIN stages ds ON ds.id = d.stage_id AND ds.is_won = true
           JOIN deal_phones dp ON dp.deal_id = d.id
@@ -1082,12 +1082,12 @@ router.get('/creatives', async (req, res) => {
              = RIGHT(REGEXP_REPLACE(dp.phone,'[^0-9]','','g'),9)
           WHERE d.lead_id IS NULL
             AND d.uf_bp_sale_date >= $1::date AND d.uf_bp_sale_date <= $2::date
-          GROUP BY fl.adset_name
+          GROUP BY fl.adset_name, fl.campaign_name
         )
-        SELECT adset_name, SUM(cnt)::int AS sotuv_boldi FROM adset_sotuv GROUP BY adset_name
+        SELECT adset_name, campaign_name, SUM(cnt)::int AS sotuv_boldi FROM adset_sotuv GROUP BY adset_name, campaign_name
       `, [sotuvFrom, sotuvTo]);
       for (const row of sotuvRows) {
-        sotuvByAdset[row.adset_name ?? 'N/A'] = row.sotuv_boldi;
+        sotuvByAdset[`${row.adset_name ?? 'N/A'}|${row.campaign_name ?? 'N/A'}`] = row.sotuv_boldi;
       }
     }
 
@@ -1135,7 +1135,7 @@ router.get('/creatives', async (req, res) => {
       sifatsiz:           r.sifatsiz,
       bekor_boldi:        r.bekor_boldi,
       konsultatsiya_otdi: r.konsultatsiya_otdi,
-      sotuv_boldi:        sotuvByAdset[r.adset_name] ?? 0,
+      sotuv_boldi:        sotuvByAdset[`${r.adset_name}|${r.campaign_name}`] ?? 0,
       sifat_rate:    r.in_bitrix > 0
         ? Math.round((r.sifatli / r.in_bitrix) * 100)
         : 0,

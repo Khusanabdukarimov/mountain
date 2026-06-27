@@ -949,6 +949,8 @@ export default function KampaniyalarPage() {
                 }
                 const fsRows = (formStatsQ.data?.rows ?? [])
                   .filter(r => activeCampNames.size === 0 || activeCampNames.has(r.campaign_name))
+                  .filter(r => !targetologCampSet || targetologCampSet.has(r.campaign_name))
+                  .filter(r => filterCampaigns.length === 0 || filterCampaigns.includes(r.campaign_name))
                   .filter(r => !search || r.campaign_name.toLowerCase().includes(search.toLowerCase()));
 
                 const totals = fsRows.reduce(
