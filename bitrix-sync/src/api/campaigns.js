@@ -266,16 +266,25 @@ function buildInsights(rawRows, monthKey, year) {
 
 // ── Routes ─────────────────────────────────────────────────────
 
-// GET /api/campaigns/active-names — campaigns with spend in the last 7 days
+// GET /api/campaigns/active-names — campaigns active in current month (spend OR lead)
 router.get('/active-names', async (req, res) => {
+  const from = req.query.from || null;
+  const to   = req.query.to   || null;
   try {
+    const monthStart = from || new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().slice(0,10);
+    const monthEnd   = to   || new Date().toISOString().slice(0,10);
     const { rows } = await pool.query(`
-      SELECT DISTINCT campaign_name
-      FROM meta_ad_daily
-      WHERE date >= (SELECT MAX(date) FROM meta_ad_daily) - INTERVAL '7 days'
-        AND spend > 0
+      SELECT DISTINCT campaign_name FROM (
+        SELECT DISTINCT campaign_name FROM meta_ad_daily
+        WHERE date >= $1 AND date <= $2 AND spend > 0
+        UNION
+        SELECT DISTINCT campaign_name FROM facebook_leads
+        WHERE (created_time AT TIME ZONE 'Asia/Tashkent')::date >= $1
+          AND (created_time AT TIME ZONE 'Asia/Tashkent')::date <= $2
+          AND campaign_name IS NOT NULL
+      ) t
       ORDER BY campaign_name
-    `);
+    `, [monthStart, monthEnd]);
     res.json({ campaigns: rows.map(r => r.campaign_name) });
   } catch (err) {
     console.error('[campaigns/active-names]', err.message);
