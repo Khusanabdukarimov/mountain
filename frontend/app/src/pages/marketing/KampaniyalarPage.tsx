@@ -587,8 +587,11 @@ export default function KampaniyalarPage() {
   );
 
   const totalSotuvFromCreatives = useMemo(
-    () => filteredCreativesForKpi.reduce((a, r) => a + (r.sotuv_boldi ?? 0), 0),
-    [filteredCreativesForKpi],
+    () => (formStatsQ.data?.rows ?? [])
+      .filter(r => !targetologCampSet || targetologCampSet.has(r.campaign_name))
+      .filter(r => filterCampaigns.length === 0 || filterCampaigns.includes(r.campaign_name))
+      .reduce((a, r) => a + (r.sotuv_boldi ?? 0), 0),
+    [formStatsQ.data, targetologCampSet, filterCampaigns],
   );
 
   async function refresh() {

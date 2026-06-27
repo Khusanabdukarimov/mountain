@@ -1043,24 +1043,39 @@ router.get('/creatives', async (req, res) => {
       ORDER BY meta_leads DESC
     `, [since, until, sotuvFrom, sotuvTo]);
 
-    // 1b. When sotuv dates differ from lead dates, run a separate query without
-    //     the fl.created_time constraint so we can count WON deals sold in the
-    //     sotuv period regardless of when the original facebook lead was created.
+    // 1b. Sotuv per adset via two paths (always run, not just for separate sotuv dates):
+    //   Path A: deals -> lead_id -> leads -> lead_phones -> facebook_leads (UTM match)
+    //   Path B: deals -> deal_phones -> facebook_leads (for deals without lead_id)
     let sotuvByAdset = {};
-    if (hasSeparateSotuv) {
+    {
       const { rows: sotuvRows } = await pool.query(`
-        SELECT
-          COALESCE(fl.adset_name, 'N/A') AS adset_name,
-          COUNT(DISTINCT d.id)::int      AS sotuv_boldi
-        FROM facebook_leads fl
-        JOIN deal_phones dp
-          ON RIGHT(REGEXP_REPLACE(dp.phone, '[^0-9]', '', 'g'), 9)
-           = RIGHT(REGEXP_REPLACE(fl.phone,  '[^0-9]', '', 'g'), 9)
-        JOIN deals  d  ON d.id = dp.deal_id
-        JOIN stages ds ON ds.id = d.stage_id AND ds.is_won = true
-        WHERE d.uf_bp_sale_date >= $1::date
-          AND d.uf_bp_sale_date <= $2::date
-        GROUP BY fl.adset_name
+        WITH adset_sotuv AS (
+          -- Path A: deal -> lead_id -> leads -> lead_phones -> facebook_leads
+          SELECT COALESCE(fl.adset_name, 'N/A') AS adset_name, COUNT(DISTINCT d.id)::int AS cnt
+          FROM deals d
+          JOIN stages ds ON ds.id = d.stage_id AND ds.is_won = true
+          JOIN leads le ON le.id = d.lead_id
+          JOIN lead_phones lp ON lp.lead_id = le.id
+          JOIN facebook_leads fl
+            ON RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9)
+             = RIGHT(REGEXP_REPLACE(lp.phone,'[^0-9]','','g'),9)
+            AND fl.campaign_name = le.utm_campaign
+          WHERE d.uf_bp_sale_date >= $1::date AND d.uf_bp_sale_date <= $2::date
+          GROUP BY fl.adset_name
+          UNION ALL
+          -- Path B: deal -> deal_phones -> facebook_leads (no lead_id)
+          SELECT COALESCE(fl.adset_name, 'N/A') AS adset_name, COUNT(DISTINCT d.id)::int AS cnt
+          FROM deals d
+          JOIN stages ds ON ds.id = d.stage_id AND ds.is_won = true
+          JOIN deal_phones dp ON dp.deal_id = d.id
+          JOIN facebook_leads fl
+            ON RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9)
+             = RIGHT(REGEXP_REPLACE(dp.phone,'[^0-9]','','g'),9)
+          WHERE d.lead_id IS NULL
+            AND d.uf_bp_sale_date >= $1::date AND d.uf_bp_sale_date <= $2::date
+          GROUP BY fl.adset_name
+        )
+        SELECT adset_name, SUM(cnt)::int AS sotuv_boldi FROM adset_sotuv GROUP BY adset_name
       `, [sotuvFrom, sotuvTo]);
       for (const row of sotuvRows) {
         sotuvByAdset[row.adset_name ?? 'N/A'] = row.sotuv_boldi;
@@ -1111,7 +1126,7 @@ router.get('/creatives', async (req, res) => {
       sifatsiz:           r.sifatsiz,
       bekor_boldi:        r.bekor_boldi,
       konsultatsiya_otdi: r.konsultatsiya_otdi,
-      sotuv_boldi:        hasSeparateSotuv ? (sotuvByAdset[r.adset_name] ?? 0) : r.sotuv_boldi,
+      sotuv_boldi:        sotuvByAdset[r.adset_name] ?? 0,
       sifat_rate:    r.in_bitrix > 0
         ? Math.round((r.sifatli / r.in_bitrix) * 100)
         : 0,
