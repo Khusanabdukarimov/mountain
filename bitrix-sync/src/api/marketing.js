@@ -136,24 +136,34 @@ router.get('/kunlik', async (req, res) => {
       }
     }
 
-    // ── 4. Kelishuvlar: by when deal reached UC_W35V62 stage (stage history) ──
+    // ── 4. Kelishuvlar: UC_W35V62 stagega kirgan YOKI sotuv bo'ldi deallar ──
     const kelishuvRes = await pool.query(`
-      SELECT
-        EXTRACT(DAY FROM dsh.changed_at AT TIME ZONE 'Asia/Tashkent')::int AS day,
-        COALESCE(d.opportunity, 0)::numeric AS opp
-      FROM deal_stage_history dsh
-      JOIN stages s ON s.id = dsh.stage_id AND s.bitrix_id = 'UC_W35V62'
-      JOIN deals d ON d.id = dsh.deal_id AND d.source_id = $3
-      WHERE (dsh.changed_at AT TIME ZONE 'Asia/Tashkent')::date >= $1
-        AND (dsh.changed_at AT TIME ZONE 'Asia/Tashkent')::date <= $2
+      SELECT DISTINCT ON (d.id)
+        EXTRACT(DAY FROM d.date_create AT TIME ZONE 'Asia/Tashkent')::int AS day,
+        COALESCE(d.uf_tolandi_sum, 0)::numeric AS kelishuv_sum
+      FROM deals d
+      JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal'
+      WHERE d.source_id = $3
+        AND (d.date_create AT TIME ZONE 'Asia/Tashkent')::date >= $1
+        AND (d.date_create AT TIME ZONE 'Asia/Tashkent')::date <= $2
+        AND (
+          s.is_won = true
+          OR EXISTS (
+            SELECT 1 FROM deal_stage_history dsh
+            JOIN stages sk ON sk.id = dsh.stage_id AND sk.bitrix_id = 'UC_W35V62'
+            WHERE dsh.deal_id = d.id
+              AND (dsh.changed_at AT TIME ZONE 'Asia/Tashkent')::date >= $1
+              AND (dsh.changed_at AT TIME ZONE 'Asia/Tashkent')::date <= $2
+          )
+        )
     `, [monthStart, monthEnd, TARGET_SRC]);
 
     for (const row of kelishuvRes.rows) {
       if (!row.day || row.day < 1 || row.day > daysInMonth) continue;
       const i   = row.day - 1;
-      const opp = parseFloat(row.opp) || 0;
+      const sum = parseFloat(row.kelishuv_sum) || 0;
       result.target.deals[i]++;
-      result.target.deals_sum[i] = Math.round((result.target.deals_sum[i] + opp) * 100) / 100;
+      result.target.deals_sum[i] = Math.round((result.target.deals_sum[i] + sum) * 100) / 100;
     }
 
     res.json({ month: monthKey, year, data: result });
