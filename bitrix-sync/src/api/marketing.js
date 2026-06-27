@@ -48,8 +48,8 @@ router.get('/kunlik', async (req, res) => {
   if (!monthNum) return res.status(400).json({ error: `Unknown month: ${monthKey}` });
 
   const daysInMonth = new Date(year, monthNum, 0).getDate();
-  const since = `${year}-${String(monthNum).padStart(2,'0')}-01 00:00:00`;
-  const until = `${year}-${String(monthNum).padStart(2,'0')}-${String(daysInMonth).padStart(2,'0')} 23:59:59`;
+  const monthStart = `${year}-${String(monthNum).padStart(2,'0')}-01`;
+  const monthEnd   = `${year}-${String(monthNum).padStart(2,'0')}-${String(daysInMonth).padStart(2,'0')}`;
 
   const METRICS = ['leads','qual_leads','meetings','deals','deals_sum','sales_count','sales_sum','cancelled'];
 
@@ -66,10 +66,11 @@ router.get('/kunlik', async (req, res) => {
         EXTRACT(DAY FROM date_create AT TIME ZONE 'Asia/Tashkent')::int AS day,
         COUNT(*)::int AS cnt
       FROM leads
-      WHERE date_create >= $1 AND date_create <= $2
+      WHERE (date_create AT TIME ZONE 'Asia/Tashkent')::date >= $1
+        AND (date_create AT TIME ZONE 'Asia/Tashkent')::date <= $2
         AND source_id = $3
       GROUP BY day
-    `, [since, until, TARGET_SRC]);
+    `, [monthStart, monthEnd, TARGET_SRC]);
 
     for (const row of leadsRes.rows) {
       if (row.day >= 1 && row.day <= daysInMonth) {
@@ -86,9 +87,10 @@ router.get('/kunlik', async (req, res) => {
         s.is_won
       FROM leads l
       LEFT JOIN stages s ON s.id = l.stage_id AND s.entity = 'lead'
-      WHERE l.date_create >= $1 AND l.date_create <= $2
+      WHERE (l.date_create AT TIME ZONE 'Asia/Tashkent')::date >= $1
+        AND (l.date_create AT TIME ZONE 'Asia/Tashkent')::date <= $2
         AND l.source_id = $3
-    `, [since, until, TARGET_SRC]);
+    `, [monthStart, monthEnd, TARGET_SRC]);
 
     for (const row of qualLeadsRes.rows) {
       if (!row.day || row.day < 1 || row.day > daysInMonth) continue;
@@ -101,7 +103,7 @@ router.get('/kunlik', async (req, res) => {
       }
     }
 
-    // ── 3. Deal-based metrics: meetings, deals, deals_sum, cancelled ──
+    // ── 3. Deal-based metrics: meetings, deals, deals_sum, sales, cancelled ──
     const dealMetricsRes = await pool.query(`
       SELECT
         EXTRACT(DAY FROM d.date_create AT TIME ZONE 'Asia/Tashkent')::int AS day,
@@ -111,9 +113,10 @@ router.get('/kunlik', async (req, res) => {
         COALESCE(d.opportunity, 0)::numeric AS opp
       FROM deals d
       LEFT JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal'
-      WHERE d.date_create >= $1 AND d.date_create <= $2
+      WHERE (d.date_create AT TIME ZONE 'Asia/Tashkent')::date >= $1
+        AND (d.date_create AT TIME ZONE 'Asia/Tashkent')::date <= $2
         AND d.source_id = $3
-    `, [since, until, TARGET_SRC]);
+    `, [monthStart, monthEnd, TARGET_SRC]);
 
     for (const row of dealMetricsRes.rows) {
       if (!row.day || row.day < 1 || row.day > daysInMonth) continue;
@@ -127,7 +130,7 @@ router.get('/kunlik', async (req, res) => {
         result.target.deals[i]++;
         result.target.deals_sum[i] = Math.round((result.target.deals_sum[i] + opp) * 100) / 100;
       }
-      // Sotuv bo'ldi = won deals by date_create (matches Bitrix kanban count)
+      // Sotuv bo'ldi = won deals by date_create
       if (row.is_won) {
         result.target.sales_count[i]++;
         result.target.sales_sum[i] = Math.round((result.target.sales_sum[i] + opp) * 100) / 100;
