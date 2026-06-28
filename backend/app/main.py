@@ -730,6 +730,7 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all"):
 
     _METRICS = ["leads", "qual_leads", "meetings", "deals", "deals_sum", "sales_count", "sales_sum", "cancelled"]
     result = {"target": {m: [0.0] * days_in_month for m in _METRICS}}
+    result["unmatched"] = {"sales_count": [0.0] * days_in_month, "sales_sum": [0.0] * days_in_month}
 
     # Target source_id in Bitrix24 = UC_89FPH6
     TARGET_SRC = "UC_89FPH6"
@@ -790,8 +791,7 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all"):
             if stage_bid in {"UC_NAZK5J", "JUNK"}:
                 result["target"]["cancelled"][idx] += int(cnt)
 
-        # ── DEAL metrics ──────────────────────────────────────────────
-        # deals.lead_id → leads.utm_campaign orqali targetolog filter
+        # ── DEAL metrics (meetings, shartnoma) by date_create ───────────
         deal_params: dict = {"since": since, "until": until, "src": TARGET_SRC}
         deal_campaign_filter = _build_campaign_filter("l_deal", deal_params)
 
@@ -800,9 +800,7 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all"):
                 EXTRACT(DAY FROM d.date_create AT TIME ZONE 'Asia/Tashkent')::int AS day,
                 s.bitrix_id AS stage_bid,
                 s.is_won,
-                s.is_final,
-                COALESCE(d.opportunity, 0) AS opp,
-                COALESCE(d.uf_tolandi_sum, 0) AS tolandi_sum
+                CASE WHEN d.currency_id = 'USD' THEN COALESCE(d.opportunity, 0) ELSE 0 END AS opp
             FROM deals d
             LEFT JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal'
             LEFT JOIN leads l_deal ON l_deal.id = d.lead_id
@@ -810,27 +808,111 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all"):
               AND d.source_id = :src
               {deal_campaign_filter}
         """)
-        for day, stage_bid, is_won, is_final, opp, tolandi_sum in conn.execute(deal_sql, deal_params):
+        for day, stage_bid, is_won, opp in conn.execute(deal_sql, deal_params):
             if day is None or day < 1 or day > days_in_month:
                 continue
             idx = int(day) - 1
-            opp_f = float(opp)
-            tolandi_f = float(tolandi_sum or 0)
             if stage_bid == "NEW":
                 result["target"]["meetings"][idx] += 1
-            # Kelishuvlar = UC_W35V62 stage yoki sotuv bo'ldi (won)
             if stage_bid == "UC_W35V62" or is_won:
                 result["target"]["deals"][idx] += 1
-                result["target"]["deals_sum"][idx] += tolandi_f
-            if is_won:
-                result["target"]["sales_count"][idx] += 1
-                result["target"]["sales_sum"][idx] += opp_f
+                result["target"]["deals_sum"][idx] += float(opp)
+
+        # ── SALES metrics by uf_bp_sale_date via facebook_leads match ──
+        # Same attribution as Kampaniya page: Path A (lead_phones) + Path B (deal_phones)
+        sale_params: dict = {"since": since, "until": until}
+
+        # Build campaign IN clause for both EXISTS subqueries
+        if targ_keys and _assigned_campaigns:
+            _ck: list[str] = []
+            for _n in _assigned_campaigns:
+                _k = f"sc{len(sale_params)}"
+                sale_params[_k] = _n
+                _ck.append(f":{_k}")
+            _camp_in = f"IN ({', '.join(_ck)})"
+            _camp_filter_a = f"AND fl_a.campaign_name {_camp_in}"
+            _camp_filter_b = f"AND fl_b.campaign_name {_camp_in}"
+        elif targ_keys:
+            _camp_filter_a = "AND FALSE"
+            _camp_filter_b = "AND FALSE"
+        else:
+            _camp_filter_a = ""
+            _camp_filter_b = ""
+
+        sale_sql = _text(f"""
+            SELECT
+                EXTRACT(DAY FROM d.uf_bp_sale_date AT TIME ZONE 'Asia/Tashkent')::int AS day,
+                COALESCE(d.opportunity, 0) AS opp
+            FROM deals d
+            JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
+            WHERE d.uf_bp_sale_date::date BETWEEN :since AND :until
+              AND (
+                EXISTS (
+                  SELECT 1 FROM leads le
+                  JOIN lead_phones lp ON lp.lead_id = le.id
+                  JOIN facebook_leads fl_a ON
+                    RIGHT(REGEXP_REPLACE(fl_a.phone,'[^0-9]','','g'),9)
+                    = RIGHT(REGEXP_REPLACE(lp.phone,'[^0-9]','','g'),9)
+                    AND fl_a.campaign_name = le.utm_campaign
+                  WHERE le.id = d.lead_id
+                    {_camp_filter_a}
+                )
+                OR EXISTS (
+                  SELECT 1 FROM deal_phones dp
+                  JOIN facebook_leads fl_b ON
+                    RIGHT(REGEXP_REPLACE(fl_b.phone,'[^0-9]','','g'),9)
+                    = RIGHT(REGEXP_REPLACE(dp.phone,'[^0-9]','','g'),9)
+                  WHERE dp.deal_id = d.id
+                    {_camp_filter_b}
+                )
+              )
+        """)
+        for day, opp in conn.execute(sale_sql, sale_params):
+            if day is None or day < 1 or day > days_in_month:
+                continue
+            idx = int(day) - 1
+            result["target"]["sales_count"][idx] += 1
+            result["target"]["sales_sum"][idx] += float(opp)
+
+        # ── UNMATCHED sales (won Target deals NOT linked to any FB campaign) ──
+        unmatched_sql = _text("""
+            SELECT
+                EXTRACT(DAY FROM d.uf_bp_sale_date AT TIME ZONE 'Asia/Tashkent')::int AS day,
+                CASE WHEN d.currency_id = 'USD' THEN COALESCE(d.opportunity, 0) ELSE 0 END AS opp
+            FROM deals d
+            JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
+            WHERE d.uf_bp_sale_date::date BETWEEN :since AND :until
+              AND d.source_id = :src
+              AND NOT EXISTS (
+                SELECT 1 FROM leads le
+                JOIN lead_phones lp ON lp.lead_id = le.id
+                JOIN facebook_leads fl ON
+                  RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9)
+                  = RIGHT(REGEXP_REPLACE(lp.phone,'[^0-9]','','g'),9)
+                  AND fl.campaign_name = le.utm_campaign
+                WHERE le.id = d.lead_id
+              )
+              AND NOT EXISTS (
+                SELECT 1 FROM deal_phones dp
+                JOIN facebook_leads fl ON
+                  RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9)
+                  = RIGHT(REGEXP_REPLACE(dp.phone,'[^0-9]','','g'),9)
+                WHERE dp.deal_id = d.id
+              )
+        """)
+        for day, opp in conn.execute(unmatched_sql, {"since": since, "until": until, "src": TARGET_SRC}):
+            if day is None or day < 1 or day > days_in_month:
+                continue
+            idx = int(day) - 1
+            result["unmatched"]["sales_count"][idx] += 1
+            result["unmatched"]["sales_sum"][idx] += float(opp)
 
     # Convert float arrays to int where appropriate
     int_keys = {"leads", "qual_leads", "meetings", "deals", "sales_count", "cancelled"}
     for sec in result.values():
         for k in int_keys:
-            sec[k] = [int(v) for v in sec[k]]
+            if k in sec:
+                sec[k] = [int(v) for v in sec[k]]
 
     return {"month": month, "year": year, "data": result}
 
@@ -1075,25 +1157,28 @@ def api_marketing_kunlik_segment(section_id: int, month: str, year: int):
                 if stage_bid in _CANCEL_STAGES:
                     result["cancelled"][idx] += int(cnt)
 
-        # ── Deal metrics: meetings + kelishuv (by date_create) ────
+        # ── Deal metrics: leads+qual_leads=total deals, meetings, shartnoma
         if deal_col and source_names:
             deal_sql = _text(f"""
                 SELECT
                     EXTRACT(DAY FROM d.date_create)::int AS day,
                     s.bitrix_id AS stage_bid,
-                    COALESCE(d.opportunity, 0) AS opp
+                    s.is_won,
+                    CASE WHEN d.currency_id = 'USD' THEN COALESCE(d.opportunity, 0) ELSE 0 END AS opp
                 FROM deals d
                 JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal'
                 WHERE d.date_create::date BETWEEN :since AND :until
                   AND d.{deal_col} = ANY(:names)
             """)
-            for day, stage_bid, opp in conn.execute(deal_sql, {"since": since, "until": until, "names": source_names}):
+            for day, stage_bid, is_won, opp in conn.execute(deal_sql, {"since": since, "until": until, "names": source_names}):
                 if day < 1 or day > days_in_month:
                     continue
                 idx = int(day) - 1
+                result["leads"][idx] += 1       # lidlar soni = deal count
+                result["qual_leads"][idx] += 1  # maqsadli lidlar = deal count
                 if stage_bid == "NEW":
                     result["meetings"][idx] += 1
-                if stage_bid == "UC_W35V62":
+                if stage_bid == "UC_W35V62" or is_won:
                     result["deals"][idx] += 1
                     result["deals_sum"][idx] += float(opp)
 

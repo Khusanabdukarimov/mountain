@@ -594,6 +594,11 @@ export default function KampaniyalarPage() {
     [formStatsQ.data, targetologCampSet, filterCampaigns],
   );
 
+  const totalUnmatchedSales = useMemo(
+    () => ((kunlikQ.data?.data?.['unmatched']?.sales_count ?? []) as number[]).reduce((a, v) => a + v, 0),
+    [kunlikQ.data],
+  );
+
   async function refresh() {
     setRefreshing(true);
     await Promise.all([insightsQ.refetch(), campaignsQ.refetch(), formsQ.refetch(), pageFormsQ.refetch()]);
@@ -742,13 +747,14 @@ export default function KampaniyalarPage() {
       <div className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
 
         {/* KPI row 1 — Lidlar */}
-        <div className="grid grid-cols-3 gap-3">
-          {(isLoading || kunlikQ.isLoading) ? Array.from({ length: 3 }).map((_, i) => (
+        <div className="grid grid-cols-4 gap-3">
+          {(isLoading || kunlikQ.isLoading) ? Array.from({ length: 4 }).map((_, i) => (
             <Skeleton key={i} className="h-24 rounded-xl" />
           )) : ([
-            { label: "JAMI LIDLAR",    value: fmtNum(pendingLeads),              sub: "Forma lidlari",            color: "text-text"  },
-            { label: "SIFATLI LIDLAR", value: fmtNum(totalSifatliFromForms),     sub: "Forma sifatlilar",         color: "text-green" },
-            { label: "SOTUV",          value: fmtNum(totalSotuvFromCreatives),   sub: "Forma lidlaridan sotuvlar", color: "text-blue"  },
+            { label: "JAMI LIDLAR",         value: fmtNum(pendingLeads),            sub: "Forma lidlari",             color: "text-text"  },
+            { label: "SIFATLI LIDLAR",      value: fmtNum(totalSifatliFromForms),   sub: "Forma sifatlilar",          color: "text-green" },
+            { label: "SOTUV",               value: fmtNum(totalSotuvFromCreatives), sub: "Forma lidlaridan sotuvlar",  color: "text-blue"  },
+            { label: "UTM TO'LDIRILMAGAN",  value: fmtNum(totalUnmatchedSales),     sub: "FB forma topilmagan sotuvlar", color: "text-text3" },
           ]).map(c => (
             <div key={c.label} className="bg-bg2 border border-border rounded-xl p-4">
               <div className="text-[10px] font-bold text-text3 tracking-wider mb-2">{c.label}</div>

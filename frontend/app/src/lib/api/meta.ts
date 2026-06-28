@@ -43,12 +43,18 @@ export type KunlikRow = {
   cancelled: number[];
 };
 
+export type UnmatchedRow = {
+  sales_count: number[];
+  sales_sum: number[];
+};
+
 export type KunlikResponse = {
   month: string;
   year: number;
   data: {
     target: KunlikRow;
     instagram: KunlikRow;
+    unmatched: UnmatchedRow;
   };
 };
 

@@ -50,7 +50,8 @@ const METRICS: MetricDef[] = [
 ];
 
 const SECTIONS: { key: Section; label: string; color: string }[] = [
-  { key: "target", label: "Target", color: "#1877f2" },
+  { key: "target",    label: "Target",             color: "#1877f2" },
+  { key: "unmatched", label: "UTM to'ldirilmagan", color: "#6b7280" },
 ];
 
 function daysInMonth(month: MonthKey, year: number) {
@@ -160,8 +161,19 @@ export default function KunlikPage() {
       sales_sum:   ((d as { sales_sum?: number[] })?.sales_sum   ?? empty()) as number[],
       cancelled:   ((d as { cancelled?: number[] })?.cancelled   ?? empty()) as number[],
     });
+    const buildUnmatched = (): DataMap => {
+      const crm = qCrm.data?.data?.['unmatched'];
+      return {
+        budget: empty(), leads: empty(), qual_leads: empty(), meetings: empty(),
+        deals: empty(), deals_sum: empty(),
+        sales_count: (crm?.sales_count ?? empty()) as number[],
+        sales_sum:   (crm?.sales_sum   ?? empty()) as number[],
+        cancelled:   empty(),
+      };
+    };
     const result: Record<string, DataMap> = {
-      target: buildTarget(),
+      target:    buildTarget(),
+      unmatched: buildUnmatched(),
     };
     customSections.forEach((sec, idx) => {
       const d = customSegmentQueries[idx]?.data?.data;
