@@ -104,7 +104,7 @@ if $DEPLOY_BACKEND; then
     info "  Syncing backend files..."
     rsync -az --delete \
         --exclude='__pycache__' --exclude='*.pyc' --exclude='.env' \
-        --exclude='venv/' --exclude='*.log' \
+        --exclude='venv/' --exclude='*.log' --exclude='data/' \
         "$LOCAL_BACKEND/" "$SERVER:$REMOTE_BACKEND/"
     ok "  Backend files synced"
 

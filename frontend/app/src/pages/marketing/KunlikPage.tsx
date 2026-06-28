@@ -25,7 +25,8 @@ const CUSTOM_COLORS = ["#6366f1", "#0891b2", "#059669", "#d97706", "#dc2626", "#
 type MetricKey =
   | "budget" | "leads" | "qual_leads" | "meetings"
   | "deals"  | "deals_sum" | "sales_count" | "sales_sum" | "cancelled"
-  | "roas" | "qual_lead_cost" | "customer_cost";
+  | "roas" | "qual_lead_cost" | "customer_cost"
+  | "unmatched_count" | "unmatched_sum";
 
 type MetricDef = {
   key: MetricKey;
@@ -44,14 +45,15 @@ const METRICS: MetricDef[] = [
   { key: "sales_count",    label: "Sotuvlar soni",        format: "num"   },
   { key: "sales_sum",      label: "Sotuvlar summasi",     format: "money" },
   { key: "cancelled",      label: "Bekor bo'ldi",         format: "num"   },
+  { key: "unmatched_count", label: "UTM to'ldirilmagan", format: "num"   },
+  { key: "unmatched_sum",   label: "UTM sotuv summasi",  format: "money" },
   { key: "roas",           label: "ROAS",                 format: "pct",  computed: true },
   { key: "qual_lead_cost", label: "Maqsadli lid narxi",   format: "money", computed: true },
   { key: "customer_cost",  label: "Mijoz narxi",          format: "money", computed: true },
 ];
 
 const SECTIONS: { key: Section; label: string; color: string }[] = [
-  { key: "target",    label: "Target",             color: "#1877f2" },
-  { key: "unmatched", label: "UTM to'ldirilmagan", color: "#6b7280" },
+  { key: "target", label: "Target", color: "#1877f2" },
 ];
 
 function daysInMonth(month: MonthKey, year: number) {
@@ -129,57 +131,53 @@ export default function KunlikPage() {
     type DataMap = {
       budget: number[]; leads: number[]; qual_leads: number[]; meetings: number[];
       deals: number[]; deals_sum: number[]; sales_count: number[]; sales_sum: number[]; cancelled: number[];
+      unmatched_count: number[]; unmatched_sum: number[];
     };
     const buildTarget = (): DataMap => {
       const metaFb = qMeta.data?.data?.['target'];
       const metaIg = qMeta.data?.data?.['instagram'];
       const crm    = qCrm.data?.data?.['target'];
+      const unm    = qCrm.data?.data?.['unmatched'];
       // Budget = sum of all Meta spend (Facebook + Instagram platforms)
       const combinedBudget = Array.from({ length: days }, (_, i) =>
         ((metaFb?.budget as number[] | undefined)?.[i] ?? 0) + ((metaIg?.budget as number[] | undefined)?.[i] ?? 0)
       );
       return {
-        budget:      combinedBudget,
-        leads:       (crm?.leads       ?? empty()) as number[],
-        qual_leads:  (crm?.qual_leads  ?? empty()) as number[],
-        meetings:    (crm?.meetings    ?? empty()) as number[],
-        deals:       (crm?.deals       ?? empty()) as number[],
-        deals_sum:   (crm?.deals_sum   ?? empty()) as number[],
-        sales_count: (crm?.sales_count ?? empty()) as number[],
-        sales_sum:   (crm?.sales_sum   ?? empty()) as number[],
-        cancelled:   (crm?.cancelled   ?? empty()) as number[],
+        budget:          combinedBudget,
+        leads:           (crm?.leads       ?? empty()) as number[],
+        qual_leads:      (crm?.qual_leads  ?? empty()) as number[],
+        meetings:        (crm?.meetings    ?? empty()) as number[],
+        deals:           (crm?.deals       ?? empty()) as number[],
+        deals_sum:       (crm?.deals_sum   ?? empty()) as number[],
+        sales_count:     (crm?.sales_count ?? empty()) as number[],
+        sales_sum:       (crm?.sales_sum   ?? empty()) as number[],
+        cancelled:       (crm?.cancelled   ?? empty()) as number[],
+        unmatched_count: (unm?.sales_count ?? empty()) as number[],
+        unmatched_sum:   (unm?.sales_sum   ?? empty()) as number[],
       };
     };
     const buildCustom = (d: ReturnType<typeof getKunlikSegment> extends Promise<{ data: infer D }> ? D : never): DataMap => ({
-      budget:      empty(),
-      leads:       ((d as { leads?: number[] })?.leads       ?? empty()) as number[],
-      qual_leads:  ((d as { qual_leads?: number[] })?.qual_leads  ?? empty()) as number[],
-      meetings:    ((d as { meetings?: number[] })?.meetings    ?? empty()) as number[],
-      deals:       ((d as { deals?: number[] })?.deals       ?? empty()) as number[],
-      deals_sum:   ((d as { deals_sum?: number[] })?.deals_sum   ?? empty()) as number[],
-      sales_count: ((d as { sales_count?: number[] })?.sales_count ?? empty()) as number[],
-      sales_sum:   ((d as { sales_sum?: number[] })?.sales_sum   ?? empty()) as number[],
-      cancelled:   ((d as { cancelled?: number[] })?.cancelled   ?? empty()) as number[],
+      budget:          empty(),
+      leads:           ((d as { leads?: number[] })?.leads       ?? empty()) as number[],
+      qual_leads:      ((d as { qual_leads?: number[] })?.qual_leads  ?? empty()) as number[],
+      meetings:        ((d as { meetings?: number[] })?.meetings    ?? empty()) as number[],
+      deals:           ((d as { deals?: number[] })?.deals       ?? empty()) as number[],
+      deals_sum:       ((d as { deals_sum?: number[] })?.deals_sum   ?? empty()) as number[],
+      sales_count:     ((d as { sales_count?: number[] })?.sales_count ?? empty()) as number[],
+      sales_sum:       ((d as { sales_sum?: number[] })?.sales_sum   ?? empty()) as number[],
+      cancelled:       ((d as { cancelled?: number[] })?.cancelled   ?? empty()) as number[],
+      unmatched_count: empty(),
+      unmatched_sum:   empty(),
     });
-    const buildUnmatched = (): DataMap => {
-      const crm = qCrm.data?.data?.['unmatched'];
-      return {
-        budget: empty(), leads: empty(), qual_leads: empty(), meetings: empty(),
-        deals: empty(), deals_sum: empty(),
-        sales_count: (crm?.sales_count ?? empty()) as number[],
-        sales_sum:   (crm?.sales_sum   ?? empty()) as number[],
-        cancelled:   empty(),
-      };
-    };
     const result: Record<string, DataMap> = {
-      target:    buildTarget(),
-      unmatched: buildUnmatched(),
+      target: buildTarget(),
     };
     customSections.forEach((sec, idx) => {
       const d = customSegmentQueries[idx]?.data?.data;
       result[String(sec.id)] = d ? buildCustom(d as never) : {
         budget: empty(), leads: empty(), qual_leads: empty(), meetings: empty(),
         deals: empty(), deals_sum: empty(), sales_count: empty(), sales_sum: empty(), cancelled: empty(),
+        unmatched_count: empty(), unmatched_sum: empty(),
       };
     });
     return result;
@@ -189,20 +187,22 @@ export default function KunlikPage() {
   const overrides = (qPlan.data?.overrides ?? {}) as Record<string, Partial<Record<string, Record<number, number>>>>;
 
   function cellValue(src: Section, metric: MetricDef, i: number): number {
-    const b  = autoData[src] ?? { budget: [], leads: [], qual_leads: [], meetings: [], deals: [], deals_sum: [], sales_count: [], sales_sum: [], cancelled: [] };
+    const b  = autoData[src] ?? { budget: [], leads: [], qual_leads: [], meetings: [], deals: [], deals_sum: [], sales_count: [], sales_sum: [], cancelled: [], unmatched_count: [], unmatched_sum: [] };
     const ov = overrides[src]?.[metric.key];
     const day = i + 1;
     if (!metric.computed && ov?.[day] !== undefined) return ov[day];
     switch (metric.key) {
-      case "budget":      return b.budget[i];
-      case "leads":       return b.leads[i];
-      case "qual_leads":  return b.qual_leads[i];
-      case "meetings":    return b.meetings[i];
-      case "deals":       return b.deals[i];
-      case "deals_sum":   return b.deals_sum[i];
-      case "sales_count": return b.sales_count[i];
-      case "sales_sum":   return b.sales_sum[i];
-      case "cancelled":   return b.cancelled[i];
+      case "budget":          return b.budget[i];
+      case "leads":           return b.leads[i];
+      case "qual_leads":      return b.qual_leads[i];
+      case "meetings":        return b.meetings[i];
+      case "deals":           return b.deals[i];
+      case "deals_sum":       return b.deals_sum[i];
+      case "sales_count":     return b.sales_count[i];
+      case "sales_sum":       return b.sales_sum[i];
+      case "cancelled":       return b.cancelled[i];
+      case "unmatched_count": return (b.unmatched_count ?? [])[i] ?? 0;
+      case "unmatched_sum":   return (b.unmatched_sum   ?? [])[i] ?? 0;
       case "roas":
         return b.budget[i] > 0 ? (b.sales_sum[i] / b.budget[i]) * 100 : 0;
       case "qual_lead_cost":
@@ -214,7 +214,7 @@ export default function KunlikPage() {
   }
 
   function faktTotal(src: string, metric: MetricDef): number {
-    const b = autoData[src] ?? { budget: [], leads: [], qual_leads: [], meetings: [], deals: [], deals_sum: [], sales_count: [], sales_sum: [], cancelled: [] };
+    const b = autoData[src] ?? { budget: [], leads: [], qual_leads: [], meetings: [], deals: [], deals_sum: [], sales_count: [], sales_sum: [], cancelled: [], unmatched_count: [], unmatched_sum: [] };
     switch (metric.key) {
       case "roas":
         { const s = b.sales_sum.reduce((a,v)=>a+v,0), bg = b.budget.reduce((a,v)=>a+v,0);
