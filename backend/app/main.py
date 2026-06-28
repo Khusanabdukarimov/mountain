@@ -839,34 +839,48 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all"):
             _camp_filter_a = ""
             _camp_filter_b = ""
 
-        sale_sql = _text(f"""
-            SELECT
-                EXTRACT(DAY FROM d.uf_bp_sale_date AT TIME ZONE 'Asia/Tashkent')::int AS day,
-                COALESCE(d.opportunity, 0) AS opp
-            FROM deals d
-            JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
-            WHERE d.uf_bp_sale_date::date BETWEEN :since AND :until
-              AND (
-                EXISTS (
-                  SELECT 1 FROM leads le
-                  JOIN lead_phones lp ON lp.lead_id = le.id
-                  JOIN facebook_leads fl_a ON
-                    RIGHT(REGEXP_REPLACE(fl_a.phone,'[^0-9]','','g'),9)
-                    = RIGHT(REGEXP_REPLACE(lp.phone,'[^0-9]','','g'),9)
-                    AND fl_a.campaign_name = le.utm_campaign
-                  WHERE le.id = d.lead_id
-                    {_camp_filter_a}
-                )
-                OR EXISTS (
-                  SELECT 1 FROM deal_phones dp
-                  JOIN facebook_leads fl_b ON
-                    RIGHT(REGEXP_REPLACE(fl_b.phone,'[^0-9]','','g'),9)
-                    = RIGHT(REGEXP_REPLACE(dp.phone,'[^0-9]','','g'),9)
-                  WHERE dp.deal_id = d.id
-                    {_camp_filter_b}
-                )
-              )
-        """)
+        if targ_keys:
+            # Targetolog filtered: only FB-attributed deals for selected campaigns
+            sale_sql = _text(f"""
+                SELECT
+                    EXTRACT(DAY FROM d.uf_bp_sale_date AT TIME ZONE 'Asia/Tashkent')::int AS day,
+                    CASE WHEN d.currency_id = 'USD' THEN COALESCE(d.opportunity, 0) ELSE 0 END AS opp
+                FROM deals d
+                JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
+                WHERE d.uf_bp_sale_date::date BETWEEN :since AND :until
+                  AND (
+                    EXISTS (
+                      SELECT 1 FROM leads le
+                      JOIN lead_phones lp ON lp.lead_id = le.id
+                      JOIN facebook_leads fl_a ON
+                        RIGHT(REGEXP_REPLACE(fl_a.phone,'[^0-9]','','g'),9)
+                        = RIGHT(REGEXP_REPLACE(lp.phone,'[^0-9]','','g'),9)
+                        AND fl_a.campaign_name = le.utm_campaign
+                      WHERE le.id = d.lead_id
+                        {_camp_filter_a}
+                    )
+                    OR EXISTS (
+                      SELECT 1 FROM deal_phones dp
+                      JOIN facebook_leads fl_b ON
+                        RIGHT(REGEXP_REPLACE(fl_b.phone,'[^0-9]','','g'),9)
+                        = RIGHT(REGEXP_REPLACE(dp.phone,'[^0-9]','','g'),9)
+                      WHERE dp.deal_id = d.id
+                        {_camp_filter_b}
+                    )
+                  )
+            """)
+        else:
+            # No targetolog filter: all won Target deals (matched + unmatched)
+            sale_sql = _text("""
+                SELECT
+                    EXTRACT(DAY FROM d.uf_bp_sale_date AT TIME ZONE 'Asia/Tashkent')::int AS day,
+                    CASE WHEN d.currency_id = 'USD' THEN COALESCE(d.opportunity, 0) ELSE 0 END AS opp
+                FROM deals d
+                JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
+                WHERE d.uf_bp_sale_date::date BETWEEN :since AND :until
+                  AND d.source_id = :src
+            """)
+            sale_params["src"] = TARGET_SRC
         for day, opp in conn.execute(sale_sql, sale_params):
             if day is None or day < 1 or day > days_in_month:
                 continue

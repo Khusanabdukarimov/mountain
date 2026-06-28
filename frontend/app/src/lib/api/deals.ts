@@ -64,6 +64,7 @@ export type DealKpiStats = {
   tolangan: number;
   ortacha_chek: number;
   konversiya: number;
+  uzs_count: number;
 };
 
 export type DealFilterOptions = {

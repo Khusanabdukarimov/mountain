@@ -544,7 +544,8 @@ router.get('/deals-stats', async (req, res) => {
          COALESCE(SUM(d.opportunity) FILTER (WHERE s.is_won = true AND d.currency_id = 'USD'), 0)::numeric AS jami_sotuv,
          ${tolanganSubq} AS tolangan,
          COALESCE(ROUND(AVG(d.opportunity) FILTER (WHERE s.is_won = true AND d.currency_id = 'USD'), 0), 0)::numeric AS ortacha_chek,
-         ROUND(COUNT(d.id) FILTER (WHERE s.is_won = true)::numeric / NULLIF(COUNT(d.id), 0) * 100, 1) AS konversiya
+         ROUND(COUNT(d.id) FILTER (WHERE s.is_won = true)::numeric / NULLIF(COUNT(d.id), 0) * 100, 1) AS konversiya,
+         COUNT(d.id) FILTER (WHERE s.is_won = true AND d.currency_id != 'USD')::int AS uzs_count
        FROM deals d
        LEFT JOIN stages s ON s.id = d.stage_id
        LEFT JOIN LATERAL (SELECT phone FROM deal_phones WHERE deal_id = d.id LIMIT 1) ph ON true

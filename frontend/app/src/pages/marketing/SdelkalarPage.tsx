@@ -688,7 +688,8 @@ export default function SdelkalarPage() {
           return (
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3,1fr)", gap: 12, marginBottom: 20 }}>
               <KpiCard label="Shartnoma summasi" value={`$${fmtNum(Math.round(kutilmoqda))}`}
-                sub="Won sdelkalar jami summasi" gradient="linear-gradient(135deg,#0f3460,#1a6fa8)"
+                sub={kpi?.uzs_count ? `Won sdelkalar jami summasi · ${kpi.uzs_count} ta UZS hisobga olinmagan` : "Won sdelkalar jami summasi"}
+                gradient="linear-gradient(135deg,#0f3460,#1a6fa8)"
                 lightGradient="linear-gradient(135deg,rgba(0,188,212,0.07),rgba(0,188,212,0.14))"
                 icon={<DollarSign size={16} />} />
               <KpiCard label="To'langan" value={`$${fmtNum(Math.round(tolangan))}`}
