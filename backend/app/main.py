@@ -1196,30 +1196,109 @@ def api_marketing_kunlik_segment(section_id: int, month: str, year: int):
                     result["deals"][idx] += 1
                     result["deals_sum"][idx] += float(opp)
 
-        # ── Sales metrics by actual sale date ─────────────────────
+        # ── Sales metrics: won deals by uf_bp_sale_date (same logic as Target) ──
         if deal_col and source_names:
             sales_sql = _text(f"""
                 SELECT
-                    EXTRACT(DAY FROM COALESCE(d.uf_bp_sale_date, d.uf_payment_date))::int AS day,
-                    COALESCE(d.uf_paid_sum, 0) AS paid
+                    EXTRACT(DAY FROM d.uf_bp_sale_date AT TIME ZONE 'Asia/Tashkent')::int AS day,
+                    CASE WHEN d.currency_id = 'USD' THEN COALESCE(d.opportunity, 0) ELSE 0 END AS opp
                 FROM deals d
-                WHERE d.uf_paid_sum IS NOT NULL AND d.uf_paid_sum > 0
-                  AND COALESCE(d.uf_bp_sale_date, d.uf_payment_date) IS NOT NULL
-                  AND COALESCE(d.uf_bp_sale_date, d.uf_payment_date)::date BETWEEN :since AND :until
+                JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
+                WHERE d.uf_bp_sale_date::date BETWEEN :since AND :until
                   AND d.{deal_col} = ANY(:names)
             """)
-            for day, paid in conn.execute(sales_sql, {"since": since, "until": until, "names": source_names}):
-                if day < 1 or day > days_in_month:
+            for day, opp in conn.execute(sales_sql, {"since": since, "until": until, "names": source_names}):
+                if day is None or day < 1 or day > days_in_month:
                     continue
                 idx = int(day) - 1
                 result["sales_count"][idx] += 1
-                result["sales_sum"][idx] += float(paid)
+                result["sales_sum"][idx] += float(opp)
 
     int_keys = {"leads", "qual_leads", "meetings", "deals", "sales_count", "cancelled"}
     for k in int_keys:
         result[k] = [int(v) for v in result[k]]
 
     return {"month": month, "year": year, "section_id": section_id, "data": result}
+
+
+@app.get("/api/marketing/kunlik-jami-stats")
+def api_marketing_kunlik_jami_stats(month: str, year: int):
+    """Overall monthly totals for ALL CRM sources — used for Jami tab FAKT column."""
+    import calendar as _cal
+    MONTH_MAP = {
+        "yanvar": 1, "fevral": 2, "mart": 3, "aprel": 4,
+        "may": 5, "iyun": 6, "iyul": 7, "avgust": 8,
+        "sentabr": 9, "oktabr": 10, "noyabr": 11, "dekabr": 12,
+    }
+    m = MONTH_MAP.get(month.lower(), 6)
+    since = date(year, m, 1)
+    last_day = _cal.monthrange(year, m)[1]
+    until = date(year, m, last_day)
+
+    with bx_engine.connect() as conn:
+        leads_row = conn.execute(text("""
+            SELECT
+                COUNT(*)                                                                    AS total_leads,
+                COUNT(*) FILTER (WHERE s.bitrix_id IN (
+                    'IN_PROCESS','PROCESSED','UC_1KPATX','UC_Q2U9EL','UC_KXC3ZW','UC_L28G68','CONVERTED'
+                ))                                                                          AS qual_leads,
+                COUNT(*) FILTER (WHERE s.bitrix_id IN ('UC_NAZK5J','JUNK'))               AS cancelled
+            FROM leads l
+            LEFT JOIN stages s ON s.id = l.stage_id AND s.entity = 'lead'
+            WHERE l.date_create::date BETWEEN :since AND :until
+        """), {"since": since, "until": until}).fetchone()
+
+        deals_row = conn.execute(text("""
+            SELECT
+                COUNT(*)                                                                    AS total_deals,
+                COALESCE(SUM(CASE WHEN d.currency_id = 'USD' THEN d.opportunity ELSE 0 END), 0) AS deals_sum
+            FROM deals d
+            LEFT JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal'
+            WHERE d.date_create::date BETWEEN :since AND :until
+              AND (s.bitrix_id = 'UC_W35V62' OR s.is_won = true)
+        """), {"since": since, "until": until}).fetchone()
+
+        sales_row = conn.execute(text("""
+            SELECT
+                COUNT(*)                                                                    AS total_sales,
+                COALESCE(SUM(CASE WHEN d.currency_id = 'USD' THEN d.opportunity ELSE 0 END), 0) AS sales_sum
+            FROM deals d
+            JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
+            WHERE d.uf_bp_sale_date::date BETWEEN :since AND :until
+        """), {"since": since, "until": until}).fetchone()
+
+        paid_row = conn.execute(text("""
+            SELECT COALESCE(SUM(sub.amount), 0) AS total_paid
+            FROM (
+                SELECT p.amount_usd AS amount
+                FROM deal_payments p
+                JOIN deals d ON d.id = p.deal_id
+                JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal'
+                WHERE NOT (s.is_final = true AND s.is_won = false)
+                  AND p.paid_at BETWEEN :since AND :until
+                UNION ALL
+                SELECT d.uf_paid_sum AS amount
+                FROM deals d
+                JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal'
+                WHERE d.uf_paid_sum IS NOT NULL AND d.uf_paid_sum > 0
+                  AND NOT (s.is_final = true AND s.is_won = false)
+                  AND COALESCE(d.uf_bp_sale_date, d.uf_payment_date, d.date_create)::date BETWEEN :since AND :until
+                  AND d.id NOT IN (SELECT DISTINCT deal_id FROM deal_payments)
+            ) sub
+        """), {"since": since, "until": until}).fetchone()
+
+    return {
+        "month": month,
+        "year": year,
+        "total_leads":   int(leads_row.total_leads  or 0),
+        "qual_leads":    int(leads_row.qual_leads   or 0),
+        "cancelled":     int(leads_row.cancelled    or 0),
+        "total_deals":   int(deals_row.total_deals  or 0),
+        "deals_sum":     float(deals_row.deals_sum  or 0),
+        "total_sales":   int(sales_row.total_sales  or 0),
+        "sales_sum":     float(sales_row.sales_sum  or 0),
+        "total_paid":    float(paid_row.total_paid  or 0),
+    }
 
 
 @app.api_route("/api/v1/tolov", methods=["GET", "POST"])

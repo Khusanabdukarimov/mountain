@@ -160,6 +160,18 @@ export function getKunlikSegment(section_id: number, month: MonthKey, year: numb
   return apiGet<KunlikSegmentResponse>('/api/marketing/kunlik-segment', { section_id, month, year });
 }
 
+export type KunlikJamiStats = {
+  month: string; year: number;
+  total_leads: number; qual_leads: number; cancelled: number;
+  total_deals: number; deals_sum: number;
+  total_sales: number; sales_sum: number;
+  total_paid: number;
+};
+
+export function getKunlikJamiStats(month: MonthKey, year: number) {
+  return apiGet<KunlikJamiStats>('/api/marketing/kunlik-jami-stats', { month, year });
+}
+
 export function saveKunlikPlan(section: string, metric_key: string, month: MonthKey, year: number, value: number) {
   return authedFetch('/api/marketing/kunlik-plan', {
     method: 'PUT',
@@ -310,6 +322,7 @@ export type CreativeRow = {
   bekor_boldi:        number;
   konsultatsiya_otdi: number;
   sotuv_boldi:        number;
+  sotuv_sum:          number;
   sifat_rate:    number;
 };
 

@@ -1,11 +1,13 @@
 const pool = require('../db/pool');
 
 const STATUS_MAP = {
-  '1': 'pending',
-  '2': 'in_progress',
-  '3': 'review',
-  '4': 'completed',
-  '5': 'rejected',
+  '1': 'pending',       // New
+  '2': 'pending',       // Pending (waiting to start)
+  '3': 'in_progress',   // In Progress
+  '4': 'review',        // Supposedly Completed (awaiting review)
+  '5': 'completed',     // Completed
+  '6': 'in_progress',   // Deferred
+  '7': 'rejected',      // Declined
 };
 
 function parseDate(s) {

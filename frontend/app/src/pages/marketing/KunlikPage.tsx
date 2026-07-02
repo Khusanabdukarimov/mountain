@@ -8,7 +8,7 @@ import {
   getMetaInsights, getKunlikHisobot, getKunlikMeta,
   saveKunlikPlan, saveKunlikOverride,
   getKunlikSections, createKunlikSection, deleteKunlikSection, getKunlikSegment,
-  getUfFieldOptions,
+  getKunlikJamiStats, getUfFieldOptions,
   MONTH_KEYS, MONTH_LABELS,
 } from "@/lib/api/meta";
 import type { MonthKey, KunlikCustomSection } from "@/lib/api/meta";
@@ -25,6 +25,7 @@ const CUSTOM_COLORS = ["#6366f1", "#0891b2", "#059669", "#d97706", "#dc2626", "#
 type MetricKey =
   | "budget" | "leads" | "qual_leads" | "meetings"
   | "deals"  | "deals_sum" | "sales_count" | "sales_sum" | "cancelled"
+  | "tolangan"
   | "roas" | "qual_lead_cost" | "customer_cost";
 
 type MetricDef = {
@@ -77,8 +78,9 @@ const LS_HIDDEN_KEY = "kunlik_hidden_metrics";
 export default function KunlikPage() {
   const [month,        setMonth]        = useState<MonthKey>(DEFAULT_MONTH);
   const [year,         setYear]         = useState(DEFAULT_YEAR);
-  const [active,       setActive]       = useState<string>("target");
+  const [active,       setActive]       = useState<string>("jami");
   const [targetologs,  setTargetologs]  = useState<string[]>([]);
+
   const [showModal,    setShowModal]    = useState(false);
   const [filterOpen,   setFilterOpen]   = useState(false);
   const [tDropOpen,    setTDropOpen]    = useState(false);
@@ -112,6 +114,12 @@ export default function KunlikPage() {
   const qCrm      = useQuery({ queryKey: ["marketing/kunlik", month, year, targetologs], queryFn: () => getKunlikHisobot(month, year, targetologs) });
   const qPlan     = useQuery({ queryKey: ["marketing/kunlik-meta", month, year], queryFn: () => getKunlikMeta(month, year) });
   const qSections = useQuery({ queryKey: ["kunlik-sections"], queryFn: getKunlikSections, staleTime: Infinity });
+
+  const qJamiStats = useQuery({
+    queryKey: ["kunlik-jami-stats", month, year],
+    queryFn: () => getKunlikJamiStats(month, year),
+    staleTime: 60_000,
+  });
 
   const customSections: KunlikCustomSection[] = qSections.data?.sections ?? [];
 
@@ -177,10 +185,96 @@ export default function KunlikPage() {
   const overrides = (qPlan.data?.overrides ?? {}) as Record<string, Partial<Record<string, Record<number, number>>>>;
 
   function cellValue(src: Section, metric: MetricDef, i: number): number {
-    const b  = autoData[src] ?? { budget: [], leads: [], qual_leads: [], meetings: [], deals: [], deals_sum: [], sales_count: [], sales_sum: [], cancelled: [] };
-    const ov = overrides[src]?.[metric.key];
+    const b   = autoData[src] ?? { budget: [], leads: [], qual_leads: [], meetings: [], deals: [], deals_sum: [], sales_count: [], sales_sum: [], cancelled: [] };
+    const ov  = overrides[src]?.[metric.key];
     const day = i + 1;
     if (!metric.computed && ov?.[day] !== undefined) return ov[day];
+    // For computed metrics, read each source field with override fallback
+    const field = (key: string, arr: number[]) => {
+      const v = overrides[src]?.[key]?.[day];
+      return v !== undefined ? v : (arr[i] ?? 0);
+    };
+    switch (metric.key) {
+      case "budget":      return field("budget",      b.budget);
+      case "leads":       return field("leads",       b.leads);
+      case "qual_leads":  return field("qual_leads",  b.qual_leads);
+      case "meetings":    return field("meetings",    b.meetings);
+      case "deals":       return field("deals",       b.deals);
+      case "deals_sum":   return field("deals_sum",   b.deals_sum);
+      case "sales_count": return field("sales_count", b.sales_count);
+      case "sales_sum":   return field("sales_sum",   b.sales_sum);
+      case "cancelled":   return field("cancelled",   b.cancelled);
+      case "roas": {
+        const bg = field("budget", b.budget), s = field("sales_sum", b.sales_sum);
+        return bg > 0 ? (s / bg) * 100 : 0;
+      }
+      case "qual_lead_cost": {
+        const bg = field("budget", b.budget), q = field("qual_leads", b.qual_leads);
+        return q > 0 ? bg / q : 0;
+      }
+      case "customer_cost": {
+        const bg = field("budget", b.budget), sc = field("sales_count", b.sales_count);
+        return sc > 0 ? bg / sc : 0;
+      }
+    }
+    return 0;
+  }
+
+  function faktTotal(src: string, metric: MetricDef): number {
+    // Sum each day using cellValue so overrides are included
+    const sumField = (key: string) =>
+      Array.from({ length: days }, (_, i) => cellValue(src as Section, { key, format: "num", computed: false } as MetricDef, i)).reduce((a, v) => a + v, 0);
+    switch (metric.key) {
+      case "roas": {
+        const bg = sumField("budget"), s = sumField("sales_sum");
+        return bg > 0 ? (s / bg) * 100 : 0;
+      }
+      case "qual_lead_cost": {
+        const bg = sumField("budget"), q = sumField("qual_leads");
+        return q > 0 ? bg / q : 0;
+      }
+      case "customer_cost": {
+        const bg = sumField("budget"), sc = sumField("sales_count");
+        return sc > 0 ? bg / sc : 0;
+      }
+      default:
+        return Array.from({length: days}, (_, i) => cellValue(src as Section, metric, i)).reduce((a,v)=>a+v,0);
+    }
+  }
+
+  const JAMI_SECTION = { key: "jami", label: "Jami", color: "#334155", isCustom: false };
+
+  const allSections: { key: string; label: string; color: string; isCustom?: boolean; customId?: number }[] = [
+    JAMI_SECTION,
+    ...SECTIONS.map(s => ({ ...s, isCustom: false })),
+    ...customSections.map((cs, idx) => ({
+      key: String(cs.id), label: cs.title, color: cs.color || CUSTOM_COLORS[idx % CUSTOM_COLORS.length], isCustom: true, customId: cs.id,
+    })),
+  ];
+  const visibleSections = allSections.filter(s => active === "all" || s.key === active);
+
+  const jamiData = useMemo(() => {
+    const keys = Object.keys(autoData);
+    const sum = (field: string) =>
+      Array.from({ length: days }, (_, i) =>
+        keys.reduce((s, k) => s + ((autoData[k] as Record<string, number[]>)[field]?.[i] ?? 0), 0)
+      );
+    return {
+      budget:      sum('budget'),
+      leads:       sum('leads'),
+      qual_leads:  sum('qual_leads'),
+      meetings:    sum('meetings'),
+      deals:       sum('deals'),
+      deals_sum:   sum('deals_sum'),
+      sales_count: sum('sales_count'),
+      sales_sum:   sum('sales_sum'),
+      cancelled:   sum('cancelled'),
+    };
+  }, [autoData, days]);
+
+
+  function jamiCellValue(metric: MetricDef, i: number): number {
+    const b = jamiData;
     switch (metric.key) {
       case "budget":      return b.budget[i];
       case "leads":       return b.leads[i];
@@ -191,6 +285,7 @@ export default function KunlikPage() {
       case "sales_count": return b.sales_count[i];
       case "sales_sum":   return b.sales_sum[i];
       case "cancelled":   return b.cancelled[i];
+      case "tolangan":    return 0;
       case "roas":
         return b.budget[i] > 0 ? (b.sales_sum[i] / b.budget[i]) * 100 : 0;
       case "qual_lead_cost":
@@ -201,30 +296,40 @@ export default function KunlikPage() {
     return 0;
   }
 
-  function faktTotal(src: string, metric: MetricDef): number {
-    const b = autoData[src] ?? { budget: [], leads: [], qual_leads: [], meetings: [], deals: [], deals_sum: [], sales_count: [], sales_sum: [], cancelled: [] };
+  function jamiFaktTotal(metric: MetricDef): number {
+    const b  = jamiData;
+    const js = qJamiStats.data;
+    // Use true overall DB totals for absolute count/sum metrics
+    if (js) {
+      switch (metric.key) {
+        case "leads":       return js.total_leads;
+        case "qual_leads":  return js.qual_leads;
+        case "cancelled":   return js.cancelled;
+        case "deals":       return js.total_deals;
+        case "deals_sum":   return js.deals_sum;
+        case "sales_count": return js.total_sales;
+        case "sales_sum":   return js.total_paid;
+        case "tolangan":    return js.total_paid;
+      }
+    }
+    const bg = b.budget.reduce((a,v)=>a+v,0);
     switch (metric.key) {
-      case "roas":
-        { const s = b.sales_sum.reduce((a,v)=>a+v,0), bg = b.budget.reduce((a,v)=>a+v,0);
-          return bg > 0 ? (s / bg) * 100 : 0; }
-      case "qual_lead_cost":
-        { const q = b.qual_leads.reduce((a,v)=>a+v,0), bg = b.budget.reduce((a,v)=>a+v,0);
-          return q > 0 ? bg / q : 0; }
-      case "customer_cost":
-        { const sc = b.sales_count.reduce((a,v)=>a+v,0), bg = b.budget.reduce((a,v)=>a+v,0);
-          return sc > 0 ? bg / sc : 0; }
+      case "roas": {
+        const s = js ? js.sales_sum : b.sales_sum.reduce((a,v)=>a+v,0);
+        return bg > 0 ? (s / bg) * 100 : 0;
+      }
+      case "qual_lead_cost": {
+        const q = js ? js.qual_leads : b.qual_leads.reduce((a,v)=>a+v,0);
+        return q > 0 ? bg / q : 0;
+      }
+      case "customer_cost": {
+        const sc = js ? js.total_sales : b.sales_count.reduce((a,v)=>a+v,0);
+        return sc > 0 ? bg / sc : 0;
+      }
       default:
-        return Array.from({length: days}, (_, i) => cellValue(src, metric, i)).reduce((a,v)=>a+v,0);
+        return Array.from({length: days}, (_, i) => jamiCellValue(metric, i)).reduce((a,v)=>a+v,0);
     }
   }
-
-  const allSections: { key: string; label: string; color: string; isCustom?: boolean; customId?: number }[] = [
-    ...SECTIONS.map(s => ({ ...s, isCustom: false })),
-    ...customSections.map((cs, idx) => ({
-      key: String(cs.id), label: cs.title, color: cs.color || CUSTOM_COLORS[idx % CUSTOM_COLORS.length], isCustom: true, customId: cs.id,
-    })),
-  ];
-  const visibleSections = allSections.filter(s => active === "all" || s.key === active);
   const isLoading = (qMeta.isLoading && !qMeta.data) || (qCrm.isLoading && !qCrm.data);
   const yearOptions = [DEFAULT_YEAR, DEFAULT_YEAR - 1, DEFAULT_YEAR - 2];
 
@@ -473,7 +578,26 @@ export default function KunlikPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {visibleSections.map(sec => (
+                  {visibleSections.map(sec => sec.key === "jami" ? (
+                    <SectionRows
+                      key="jami"
+                      section={JAMI_SECTION}
+                      metrics={METRICS.filter(m => !hiddenMetrics.has(m.key))}
+                      days={days}
+                      isCurrent={isCurrent}
+                      todayDay={todayDay}
+                      plans={plans["jami"] ?? {}}
+                      overrides={{}}
+                      cellValue={(m, i) => jamiCellValue(m, i)}
+                      faktTotal={(m) => jamiFaktTotal(m)}
+                      onPlanSave={async (key, val) => {
+                        await saveKunlikPlan("jami", key, month, year, val);
+                        void qc.invalidateQueries({ queryKey: ["marketing/kunlik-meta", month, year] });
+                      }}
+                      onCellSave={async () => {}}
+                      onHideMetric={hideMetric}
+                    />
+                  ) : (
                     <SectionRows
                       key={sec.key}
                       section={sec}
@@ -520,133 +644,60 @@ export default function KunlikPage() {
   );
 }
 
-type FilterType = "manba" | "xizmat";
-
 function CreateSectionModal({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
-  const [filterType, setFilterType] = useState<FilterType>("manba");
-  const [selected,   setSelected]   = useState("");
-  const [name,       setName]       = useState("");
-  const [color,      setColor]      = useState(CUSTOM_COLORS[0]);
-  const [saving,     setSaving]     = useState(false);
+  const [selected, setSelected] = useState("");
+  const [name,     setName]     = useState("");
+  const [color,    setColor]    = useState(CUSTOM_COLORS[0]);
+  const [saving,   setSaving]   = useState(false);
 
-  // Source options for Manba
-  const { data: manbaData, isLoading: manbaLoading } = useQuery({
+  const { data: manbaData, isLoading } = useQuery({
     queryKey: ["uf-field-options", "SOURCE_ID"],
     queryFn:  () => getUfFieldOptions("SOURCE_ID"),
     staleTime: Infinity,
   });
-  const { data: dbSources } = useQuery({
-    queryKey: ["lead-sources"],
-    queryFn:  () => fetch("/api/marketing/lead-sources").then(r => r.json()) as Promise<{ sources: { id: string; count: number }[] }>,
-    staleTime: Infinity,
-  });
-  const manbaOptions: { id: string; label: string }[] = useMemo(() => {
-    const bx = manbaData?.options ?? [];
-    if (bx.length > 0) return bx;
-    return (dbSources?.sources ?? []).map(s => ({ id: s.id, label: s.id }));
-  }, [manbaData, dbSources]);
-
-  // Xizmat turi options
-  const { data: xizmatData, isLoading: xizmatLoading } = useQuery({
-    queryKey: ["uf-field-options", "UF_CRM_1775824803703"],
-    queryFn:  () => getUfFieldOptions("UF_CRM_1775824803703"),
-    staleTime: Infinity,
-  });
-  const xizmatOptions = xizmatData?.options ?? [];
-
-  const options     = filterType === "manba" ? manbaOptions : xizmatOptions;
-  const isLoading   = filterType === "manba" ? manbaLoading : xizmatLoading;
-  const selectedOpt = options.find(o => o.id === selected);
-
-  const handleFilterType = (t: FilterType) => {
-    setFilterType(t);
-    setSelected("");
-    setName("");
-  };
+  const options = manbaData?.options ?? [];
 
   const handleSelect = (id: string) => {
-    const prevLabel = options.find(o => o.id === selected)?.label ?? "";
+    const prev = options.find(o => o.id === selected)?.label ?? "";
     setSelected(id);
     const lbl = options.find(o => o.id === id)?.label ?? "";
-    if (!name || name === prevLabel) setName(lbl);
+    if (!name || name === prev) setName(lbl);
   };
 
   const handleSubmit = async () => {
     if (!selected || !name.trim()) return;
     setSaving(true);
-    const ufField     = filterType === "manba" ? "SOURCE_ID" : "UF_CRM_1775824803703";
-    const ufFieldDeal = filterType === "manba" ? "SOURCE_ID" : "UF_CRM_69D8F71700936";
     await createKunlikSection({
-      title:         name.trim(),
-      uf_field:      ufField,
-      uf_field_deal: ufFieldDeal,
-      source_names:  [selected],
-      color,
+      title: name.trim(), uf_field: "SOURCE_ID", uf_field_deal: "SOURCE_ID",
+      source_names: [selected], color,
     });
     onCreated();
   };
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
-      <div className="bg-bg2 border border-border rounded-xl shadow-xl w-[380px] max-w-[95vw] p-5"
+      <div className="bg-bg2 border border-border rounded-xl shadow-xl w-[360px] max-w-[95vw] p-5"
            onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-4">
           <div className="text-[14px] font-bold text-text">Yangi bo'lim</div>
           <button onClick={onClose} className="text-text3 hover:text-text"><X size={16} /></button>
         </div>
-
         <div className="space-y-3 text-[12.5px]">
-          {/* Filter type toggle */}
           <div>
-            <label className="block text-text3 mb-1.5">Filter turi</label>
-            <div className="flex gap-2">
-              {(["manba", "xizmat"] as FilterType[]).map(t => (
-                <button key={t} onClick={() => handleFilterType(t)}
-                  className={cn("px-3 py-1 rounded text-[12px] border transition-all",
-                    filterType === t
-                      ? "bg-blue border-blue text-white"
-                      : "border-border text-text2 hover:bg-bg3")}>
-                  {t === "manba" ? "Manba (Источник)" : "Xizmat turi"}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Dropdown */}
-          <div>
-            <label className="block text-text3 mb-1">
-              {filterType === "manba" ? "Manba" : "Xizmat turi"}
-            </label>
-            {isLoading ? (
-              <div className="text-text3 py-2">Yuklanmoqda…</div>
-            ) : (
-              <select
-                className="w-full bg-bg3 border border-border rounded px-3 py-2 text-text outline-none focus:border-blue"
+            <label className="block text-text3 mb-1">Manba</label>
+            {isLoading ? <div className="text-text3 py-2">Yuklanmoqda…</div> : (
+              <select className="w-full bg-bg3 border border-border rounded px-3 py-2 text-text outline-none focus:border-blue"
                 value={selected} onChange={e => handleSelect(e.target.value)}>
                 <option value="">— Tanlang —</option>
-                {options.map(o => (
-                  <option key={o.id} value={o.id}>{o.label}</option>
-                ))}
+                {options.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
               </select>
             )}
-            {selectedOpt && (
-              <div className="mt-1 text-[11px] text-text3 font-mono">
-                id: {selectedOpt.id}
-              </div>
-            )}
           </div>
-
-          {/* Section name */}
           <div>
             <label className="block text-text3 mb-1">Bo'lim nomi</label>
-            <input
-              className="w-full bg-bg3 border border-border rounded px-3 py-1.5 text-text outline-none focus:border-blue"
-              placeholder="Masalan: Ko'chadan"
-              value={name} onChange={e => setName(e.target.value)}
-            />
+            <input className="w-full bg-bg3 border border-border rounded px-3 py-1.5 text-text outline-none focus:border-blue"
+              placeholder="Masalan: Ko'chadan" value={name} onChange={e => setName(e.target.value)} />
           </div>
-
-          {/* Color */}
           <div>
             <label className="block text-text3 mb-1.5">Rang</label>
             <div className="flex gap-2">
@@ -659,12 +710,8 @@ function CreateSectionModal({ onClose, onCreated }: { onClose: () => void; onCre
             </div>
           </div>
         </div>
-
         <div className="flex gap-2 mt-5 justify-end">
-          <button onClick={onClose}
-            className="px-4 py-1.5 rounded-lg border border-border text-text2 text-[12.5px] hover:bg-bg3">
-            Bekor
-          </button>
+          <button onClick={onClose} className="px-4 py-1.5 rounded-lg border border-border text-text2 text-[12.5px] hover:bg-bg3">Bekor</button>
           <button onClick={() => void handleSubmit()} disabled={saving || !selected || !name.trim()}
             className="px-4 py-1.5 rounded-lg bg-blue text-white text-[12.5px] font-semibold disabled:opacity-50">
             {saving ? "Saqlanmoqda…" : "Qo'shish"}

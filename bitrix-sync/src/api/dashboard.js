@@ -535,26 +535,50 @@ router.get('/deals-stats', async (req, res) => {
   )::numeric`;
 
   try {
-    const { rows } = await pool.query(
-      `SELECT
-         COUNT(d.id)::int AS total,
-         COUNT(d.id) FILTER (WHERE s.is_final = false AND s.is_won = false)::int AS yangi,
-         COUNT(d.id) FILTER (WHERE s.is_won = true)::int AS sotuv_boldi,
-         COUNT(d.id) FILTER (WHERE s.is_final = true AND s.is_won = false)::int  AS bekor,
-         COALESCE(SUM(d.opportunity) FILTER (WHERE s.is_won = true AND d.currency_id = 'USD'), 0)::numeric AS jami_sotuv,
-         ${tolanganSubq} AS tolangan,
-         COALESCE(ROUND(AVG(d.opportunity) FILTER (WHERE s.is_won = true AND d.currency_id = 'USD'), 0), 0)::numeric AS ortacha_chek,
-         ROUND(COUNT(d.id) FILTER (WHERE s.is_won = true)::numeric / NULLIF(COUNT(d.id), 0) * 100, 1) AS konversiya,
-         COUNT(d.id) FILTER (WHERE s.is_won = true AND d.currency_id != 'USD')::int AS uzs_count
-       FROM deals d
-       LEFT JOIN stages s ON s.id = d.stage_id
-       LEFT JOIN LATERAL (SELECT phone FROM deal_phones WHERE deal_id = d.id LIMIT 1) ph ON true
-       WHERE ${dealDateCond(mode, 1, 2)}
-         ${dealModeClause(mode)}
-         ${extra.join(' ')}`,
-      params
-    );
-    res.json(rows[0]);
+    const [dealRows, leadFunnelRows] = await Promise.all([
+      pool.query(
+        `SELECT
+           COUNT(d.id)::int AS total,
+           COUNT(d.id) FILTER (WHERE s.is_final = false AND s.is_won = false)::int AS yangi,
+           COUNT(d.id) FILTER (WHERE s.is_won = true)::int AS sotuv_boldi,
+           COUNT(d.id) FILTER (WHERE s.bitrix_id = 'UC_W35V62' OR s.is_won = true)::int AS kelishuv_count,
+           COUNT(d.id) FILTER (WHERE s.is_final = true AND s.is_won = false)::int  AS bekor,
+           COALESCE(SUM(d.opportunity) FILTER (WHERE s.is_won = true AND d.currency_id = 'USD'), 0)::numeric AS jami_sotuv,
+           ${tolanganSubq} AS tolangan,
+           COALESCE(ROUND(AVG(d.opportunity) FILTER (WHERE s.is_won = true AND d.currency_id = 'USD'), 0), 0)::numeric AS ortacha_chek,
+           ROUND(COUNT(d.id) FILTER (WHERE s.is_won = true)::numeric / NULLIF(COUNT(d.id), 0) * 100, 1) AS konversiya,
+           COUNT(d.id) FILTER (WHERE s.is_won = true AND d.currency_id != 'USD')::int AS uzs_count
+         FROM deals d
+         LEFT JOIN stages s ON s.id = d.stage_id
+         LEFT JOIN LATERAL (SELECT phone FROM deal_phones WHERE deal_id = d.id LIMIT 1) ph ON true
+         WHERE ${dealDateCond(mode, 1, 2)}
+           ${dealModeClause(mode)}
+           ${extra.join(' ')}`,
+        params
+      ),
+      pool.query(
+        `SELECT
+           COUNT(l.id) FILTER (WHERE s.bitrix_id IN (
+             'UC_KXC3ZW','THINKING','UC_L28G68','CONSULTATION',
+             'CONVERTED_CONSULT','CONVERTED','UC_NAZK5J','RECYCLED',
+             'UC_5G8244','NOT_TRANSFERRED','JUNK','ARCHIVE'
+           ))::int AS sifatli_lid,
+           COUNT(l.id) FILTER (WHERE l.uf_tashrif_sanasi IS NOT NULL AND l.uf_tashrif_sanasi != '' AND l.uf_tashrif_sanasi != 'false')::int AS konsultatsiya_belgilandi,
+           COUNT(l.id) FILTER (WHERE s.bitrix_id IN ('CONVERTED_CONSULT','CONVERTED'))::int AS konsultatsiya_otkazildi
+         FROM leads l
+         LEFT JOIN stages s ON s.id = l.stage_id AND s.entity = 'lead'
+         WHERE ($1::date IS NULL OR l.date_create::date >= $1::date)
+           AND ($2::date IS NULL OR l.date_create::date <= $2::date)
+           AND ($3::text IS NULL OR l.source_id = ANY(string_to_array($3, ',')))
+           AND ($4::text IS NULL OR l.id IN (
+             SELECT d.lead_id FROM deals d
+             WHERE d.lead_id IS NOT NULL
+               AND d.responsible_id::text = ANY(string_to_array($4, ','))
+           ))`,
+        [from || null, to || null, source || null, responsible_id || null]
+      ),
+    ]);
+    res.json({ ...dealRows.rows[0], ...leadFunnelRows.rows[0] });
   } catch (err) {
     console.error('[dashboard/deals-stats]', err.message);
     res.status(500).json({ error: err.message });
@@ -804,7 +828,7 @@ router.get('/lead-stats', async (req, res) => {
       ${leadModeClause(mode)}`;
 
   try {
-    const [statsRes, funnelRes] = await Promise.all([
+    const [statsRes, funnelRes, callsRes, dealFunnelRes] = await Promise.all([
       pool.query(
         `SELECT
            COUNT(*)::int                                                                       AS total_leads,
@@ -847,8 +871,39 @@ router.get('/lead-stats', async (req, res) => {
          ORDER BY s.sort_order`,
         funnelParams
       ),
+      pool.query(
+        `SELECT COUNT(*)::int AS total_calls
+         FROM calls
+         WHERE ($1::date IS NULL OR (call_start AT TIME ZONE 'Asia/Tashkent')::date >= $1::date)
+           AND ($2::date IS NULL OR (call_start AT TIME ZONE 'Asia/Tashkent')::date <= $2::date)`,
+        [from || null, to || null]
+      ),
+      pool.query(
+        `SELECT
+           COUNT(*) FILTER (WHERE s.bitrix_id = 'UC_W35V62' OR s.is_won = true)::int AS kelishuv_count,
+           COUNT(*) FILTER (WHERE s.is_won = true)::int                               AS sotuv_count
+         FROM deals d
+         LEFT JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal'
+         LEFT JOIN leads l ON l.id = d.lead_id
+         WHERE ($1::date IS NULL OR d.date_create::date >= $1::date)
+           AND ($2::date IS NULL OR d.date_create::date <= $2::date)
+           AND ($3::text IS NULL OR d.source_id = ANY(string_to_array($3, ',')))
+           AND ($4::text IS NULL OR (
+             CASE WHEN d.lead_id IS NOT NULL
+               THEN l.responsible_id::text = ANY(string_to_array($4, ','))
+               ELSE d.responsible_id::text = ANY(string_to_array($4, ','))
+             END
+           ))`,
+        [from || null, to || null, source || null, responsible_id || null]
+      ),
     ]);
-    res.json({ header: statsRes.rows[0] || {}, funnel: funnelRes.rows });
+    const header = {
+      ...(statsRes.rows[0] || {}),
+      total_calls:    callsRes.rows[0]?.total_calls ?? 0,
+      kelishuv_count: dealFunnelRes.rows[0]?.kelishuv_count ?? 0,
+      sotuv_count:    dealFunnelRes.rows[0]?.sotuv_count ?? 0,
+    };
+    res.json({ header, funnel: funnelRes.rows });
   } catch (err) {
     console.error('[dashboard/lead-stats]', err.message);
     res.status(500).json({ error: err.message });

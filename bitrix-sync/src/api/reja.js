@@ -168,8 +168,11 @@ function redistribute(totalTarget, subperiods, actualsMap, todayStr) {
     ? Math.round((remainingAfterPast / currentAndFutureLen) * 100) / 100
     : 0;
 
-  // Future weeks: flex based on current running total
-  const remainingAfterCurrent = Math.max(0, remainingAfterPast - currentActual);
+  // Future weeks: flex based on current week's committed amount.
+  // Use max(currentTarget, currentActual) so that:
+  //   - before any sales in current week: future uses (total - currentTarget) → all weeks equal
+  //   - if current week overperforms: future weeks compress correctly
+  const remainingAfterCurrent = Math.max(0, remainingAfterPast - Math.max(currentTarget, currentActual));
   const futureCount           = futureList.length;
   const futureBase            = futureCount > 0
     ? Math.round((remainingAfterCurrent / futureCount) * 100) / 100
@@ -586,12 +589,23 @@ router.get('/plans/:id/progress', async (req, res) => {
     if (prevPlanRes.rows.length) {
       const pp = prevPlanRes.rows[0];
       const prevActualRes = await pool.query(`
-        SELECT COALESCE(SUM(d.uf_paid_sum), 0)::numeric AS total
-        FROM deals d
-        JOIN stages s ON s.id = d.stage_id
-        WHERE d.uf_paid_sum IS NOT NULL AND d.uf_paid_sum > 0
-          AND NOT (s.is_final AND NOT s.is_won)
-          AND COALESCE(d.uf_bp_sale_date, d.uf_payment_date, d.date_create)::date BETWEEN $1 AND $2
+        SELECT COALESCE(SUM(sub.amount), 0)::numeric AS total
+        FROM (
+          SELECT p.amount_usd AS amount
+          FROM deal_payments p
+          JOIN deals d ON d.id = p.deal_id
+          JOIN stages s ON s.id = d.stage_id
+          WHERE NOT (s.is_final = true AND s.is_won = false)
+            AND p.paid_at BETWEEN $1 AND $2
+          UNION ALL
+          SELECT d.uf_paid_sum AS amount
+          FROM deals d
+          JOIN stages s ON s.id = d.stage_id
+          WHERE d.uf_paid_sum IS NOT NULL AND d.uf_paid_sum > 0
+            AND NOT (s.is_final = true AND s.is_won = false)
+            AND COALESCE(d.uf_bp_sale_date, d.uf_payment_date, d.date_create)::date BETWEEN $1 AND $2
+            AND d.id NOT IN (SELECT DISTINCT deal_id FROM deal_payments)
+        ) sub
       `, [pp.period_start, pp.period_end]);
       prevActual = Math.round(parseFloat(prevActualRes.rows[0].total) * 100) / 100;
     }

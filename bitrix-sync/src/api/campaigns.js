@@ -871,6 +871,24 @@ async function syncAllLeads() {
       }
     }
 
+    // 2.6. Collect form IDs directly from ad accounts (no page token needed)
+    // Catches new forms not yet linked to any ad creative
+    for (const acct of allAccountIds()) {
+      try {
+        const acctForms = await paginate(`${BASE}/${acct}/leadgen_forms`, {
+          access_token: token(),
+          fields: 'id,name,status',
+          limit: 100,
+        });
+        for (const f of acctForms) {
+          if (f.id) formIds.add(f.id);
+        }
+        console.log(`[sync-leads] Account ${acct}: ${acctForms.length} leadgen forms found`);
+      } catch (err) {
+        console.warn(`[sync-leads] Could not fetch leadgen_forms from ${acct}:`, err.message);
+      }
+    }
+
     console.log(`[sync-leads] Syncing ${formIds.size} forms...`);
 
     // 3. For each form, fetch all leads from Meta and upsert
@@ -1058,9 +1076,11 @@ router.get('/creatives', async (req, res) => {
     let sotuvByAdset = {};
     {
       const { rows: sotuvRows } = await pool.query(`
-        WITH adset_sotuv AS (
-          -- Path A: deal -> lead_id -> leads -> lead_phones -> facebook_leads
-          SELECT COALESCE(fl.adset_name, 'N/A') AS adset_name, COALESCE(fl.campaign_name, 'N/A') AS campaign_name, COUNT(DISTINCT d.id)::int AS cnt
+        WITH deduped AS (
+          -- Path A: deduplicate deal per (adset, campaign) before summing
+          SELECT DISTINCT ON (d.id, fl.adset_name, fl.campaign_name)
+                 d.id, COALESCE(fl.adset_name, 'N/A') AS adset_name, COALESCE(fl.campaign_name, 'N/A') AS campaign_name,
+                 CASE WHEN d.currency_id = 'USD' THEN COALESCE(d.opportunity, 0) ELSE 0 END AS opp
           FROM deals d
           JOIN stages ds ON ds.id = d.stage_id AND ds.is_won = true
           JOIN leads le ON le.id = d.lead_id
@@ -1070,10 +1090,11 @@ router.get('/creatives', async (req, res) => {
              = RIGHT(REGEXP_REPLACE(lp.phone,'[^0-9]','','g'),9)
             AND fl.campaign_name = le.utm_campaign
           WHERE d.uf_bp_sale_date >= $1::date AND d.uf_bp_sale_date <= $2::date
-          GROUP BY fl.adset_name, fl.campaign_name
-          UNION ALL
-          -- Path B: deal -> deal_phones -> facebook_leads (no lead_id)
-          SELECT COALESCE(fl.adset_name, 'N/A') AS adset_name, COALESCE(fl.campaign_name, 'N/A') AS campaign_name, COUNT(DISTINCT d.id)::int AS cnt
+          UNION
+          -- Path B: deduplicate deal per (adset, campaign) before summing
+          SELECT DISTINCT ON (d.id, fl.adset_name, fl.campaign_name)
+                 d.id, COALESCE(fl.adset_name, 'N/A') AS adset_name, COALESCE(fl.campaign_name, 'N/A') AS campaign_name,
+                 CASE WHEN d.currency_id = 'USD' THEN COALESCE(d.opportunity, 0) ELSE 0 END AS opp
           FROM deals d
           JOIN stages ds ON ds.id = d.stage_id AND ds.is_won = true
           JOIN deal_phones dp ON dp.deal_id = d.id
@@ -1082,12 +1103,14 @@ router.get('/creatives', async (req, res) => {
              = RIGHT(REGEXP_REPLACE(dp.phone,'[^0-9]','','g'),9)
           WHERE d.lead_id IS NULL
             AND d.uf_bp_sale_date >= $1::date AND d.uf_bp_sale_date <= $2::date
-          GROUP BY fl.adset_name, fl.campaign_name
         )
-        SELECT adset_name, campaign_name, SUM(cnt)::int AS sotuv_boldi FROM adset_sotuv GROUP BY adset_name, campaign_name
+        SELECT adset_name, campaign_name,
+               COUNT(DISTINCT id)::int AS sotuv_boldi,
+               SUM(opp)::numeric       AS sotuv_sum
+        FROM deduped GROUP BY adset_name, campaign_name
       `, [sotuvFrom, sotuvTo]);
       for (const row of sotuvRows) {
-        sotuvByAdset[`${row.adset_name ?? 'N/A'}|${row.campaign_name ?? 'N/A'}`] = row.sotuv_boldi;
+        sotuvByAdset[`${row.adset_name ?? 'N/A'}|${row.campaign_name ?? 'N/A'}`] = { cnt: row.sotuv_boldi, sum: parseFloat(row.sotuv_sum) || 0 };
       }
     }
 
@@ -1135,7 +1158,8 @@ router.get('/creatives', async (req, res) => {
       sifatsiz:           r.sifatsiz,
       bekor_boldi:        r.bekor_boldi,
       konsultatsiya_otdi: r.konsultatsiya_otdi,
-      sotuv_boldi:        sotuvByAdset[`${r.adset_name}|${r.campaign_name}`] ?? 0,
+      sotuv_boldi:        sotuvByAdset[`${r.adset_name}|${r.campaign_name}`]?.cnt ?? 0,
+      sotuv_sum:          sotuvByAdset[`${r.adset_name}|${r.campaign_name}`]?.sum ?? 0,
       sifat_rate:    r.in_bitrix > 0
         ? Math.round((r.sifatli / r.in_bitrix) * 100)
         : 0,

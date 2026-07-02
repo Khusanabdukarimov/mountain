@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { useDarkMode } from "@/hooks/useDarkMode";
 import {
   Calendar, Users, Star, TrendingUp, Filter,
-  Percent, ArrowLeftRight, Target, XCircle, ChevronDown, Search,
+  ArrowLeftRight, XCircle, ChevronDown, Search,
 } from "lucide-react";
 import { Topbar } from "@/components/Topbar";
 import {
@@ -441,15 +441,16 @@ export default function LidlarPage() {
   const enrichedResponsibles = responsibles;
 
   const total             = header?.total_leads                    ?? 0;
+  const totalCalls        = (header as { total_calls?: number })?.total_calls ?? 0;
   const jarayondaCount    = header?.in_process                     ?? 0;
   const sifatsizBekor     = header?.sifatsiz_bekor_count           ?? 0;
   const bekorBoldiCount   = header?.bekor_boldi_count              ?? 0;
   const sifatliLid        = header?.sifatli_lid_count              ?? 0;
   const konsultBelgilandi = header?.konsultatsiya_belgilandi_count  ?? 0;
   const konsultOtkazildi  = header?.konsultatsiya_otkazildi_count   ?? 0;
+  const kelishuv          = (header as { kelishuv_count?: number })?.kelishuv_count ?? 0;
+  const sotuvBoldi        = (header as { sotuv_count?: number })?.sotuv_count       ?? 0;
 
-  const sifatliKonvPct   = total > 0 ? (sifatliLid        / total) * 100 : 0;
-  const leadToConsultPct = total > 0 ? (konsultBelgilandi / total) * 100 : 0;
   const overallConvPct   = total > 0 ? (konsultOtkazildi  / total) * 100 : 0;
 
   const byUserFiltered = useMemo(() => {
@@ -685,6 +686,11 @@ export default function LidlarPage() {
                         title="Umumiy Lidlar" sparkColor="#2196F3" sparkVariant={0}>
                 <div style={{ fontSize:36, fontWeight:800, color: isDark ? "#fff" : "var(--text)", lineHeight:1.1, marginBottom:3 }}>{fmtNum(total)}</div>
                 <div style={{ fontSize:11, color: isDark ? "#9E9E9E" : "var(--text3)" }}>Umumiy Lid</div>
+                {totalCalls > 0 && (
+                  <div style={{ fontSize:11, color:"#2196F3", marginTop:4, fontWeight:600 }}>
+                    + {fmtNum(totalCalls)} qo'ng'iroq
+                  </div>
+                )}
               </GradCard>
               <GradCard gradient="linear-gradient(135deg,#002a2a,#005555)" lightGradient="linear-gradient(135deg,rgba(0,188,212,0.07),rgba(0,188,212,0.03))"
                         border="rgba(0,188,212,0.3)" lightBorder="rgba(0,188,212,0.25)"
@@ -713,29 +719,33 @@ export default function LidlarPage() {
             <div style={{ display:"grid", gridTemplateColumns:"3fr 1fr", gap:12, marginBottom:20 }}>
               {/* Voronka */}
               <div style={{ background: isDark ? "linear-gradient(135deg,#0a1628,#0d2240)" : "linear-gradient(135deg,rgba(33,150,243,0.06),rgba(0,188,212,0.04))", border:"1px solid var(--border)", borderRadius:16, padding:"20px 24px", display:"flex", flexDirection:"column" }}>
-                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:20 }}>
+                <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:16 }}>
                   <Filter size={14} style={{ color:"var(--text3)" }} />
-                  <span style={{ fontSize:13, fontWeight:700, color:"var(--text)" }}>Voronka samaradorligi</span>
-                  <span style={{ fontSize:11, color:"var(--text3)", marginLeft:2 }}>Konversiya ko'rsatkichlari</span>
+                  <span style={{ fontSize:13, fontWeight:700, color:"var(--text)" }}>To'liq Voronka</span>
+                  <span style={{ fontSize:11, color:"var(--text3)", marginLeft:2 }}>Lid → Sotuv konversiyasi</span>
                 </div>
-                <div style={{ flex:1, display:"grid", gridTemplateColumns:"1fr 1px 1fr 1px 1fr 1px 1fr", gap:0, alignItems:"center" }}>
-                  {[
-                    { icon:<Percent size={22} style={{ color:"#00BCD4" }} />, bg:"rgba(0,188,212,0.15)", val:sifatliKonvPct,   color:"#00BCD4", title:"Sifatli Konversiya",   sub:"Sifatli / Umumiy" },
-                    { icon:<ArrowLeftRight size={22} style={{ color:"#4CAF50" }} />, bg:"rgba(76,175,80,0.15)", val:leadToConsultPct, color:"#4CAF50", title:"Lid → Konsultatsiya", sub:"Umumiy → K.Belgilandi" },
-                    { icon:<Target size={22} style={{ color:"#9C27B0" }} />, bg:"rgba(156,39,176,0.15)", val: konsultBelgilandi > 0 ? (konsultOtkazildi / konsultBelgilandi) * 100 : 0, color:"#9C27B0", title:"K.O'tkazildi / Belgilandi", sub:"Belgilandi → O'tkazildi" },
-                    { icon:<Target size={22} style={{ color:"#3F51B5" }} />, bg:"rgba(63,81,181,0.15)", val: sifatliLid > 0 ? (konsultOtkazildi / sifatliLid) * 100 : 0, color:"#3F51B5", title:"Sifatli → Uchrashuv", sub:"Sifatli / O'tkazildi" },
-                  ].map((m, i) => (
-                    <>
-                      <div key={m.title} style={{ display:"flex", flexDirection:"column", alignItems:"center", justifyContent:"center", padding:"8px 24px", gap:12 }}>
-                        <div style={{ width:52, height:52, borderRadius:"50%", background:m.bg, display:"flex", alignItems:"center", justifyContent:"center" }}>{m.icon}</div>
-                        <div style={{ textAlign:"center" }}>
-                          <div style={{ fontSize:12, fontWeight:600, color:"var(--text2)", marginBottom:6 }}>{m.title}</div>
-                          <div style={{ fontSize:40, fontWeight:800, color:m.color, lineHeight:1 }}>{m.val.toFixed(1)}%</div>
-                          <div style={{ fontSize:11, color:"var(--text3)", marginTop:6 }}>{m.sub}</div>
+                <div style={{ flex:1, display:"flex", alignItems:"center", gap:0 }}>
+                  {([
+                    { label:"Sifatli Lid",      count: sifatliLid,        color:"#00BCD4", pct: total > 0 ? (sifatliLid / total) * 100 : 0,                                                  pctLabel:"Umumiydan" },
+                    { label:"K. Belgilandi",     count: konsultBelgilandi, color:"#9C27B0", pct: sifatliLid > 0 ? (konsultBelgilandi / sifatliLid) * 100 : 0,                                 pctLabel:"Sifatlidan" },
+                    { label:"K. O'tkazildi",     count: konsultOtkazildi,  color:"#4CAF50", pct: konsultBelgilandi > 0 ? (konsultOtkazildi / konsultBelgilandi) * 100 : 0,                    pctLabel:"Belgilandidan" },
+                    { label:"Kelishuv bo'ldi",   count: kelishuv,          color:"#FF9800", pct: konsultOtkazildi > 0 ? (kelishuv / konsultOtkazildi) * 100 : 0,                              pctLabel:"O'tkazildidan" },
+                    { label:"Sotuv bo'ldi",      count: sotuvBoldi,        color:"#4CAF50", pct: kelishuv > 0 ? (sotuvBoldi / kelishuv) * 100 : 0,                                            pctLabel:"Kelishuvdan" },
+                  ] as { label:string; count:number; color:string; pct:number; pctLabel:string }[]).map((s, i) => (
+                    <div key={s.label} style={{ display:"flex", alignItems:"center", flex: i < 4 ? "1 1 0" : "none" }}>
+                      <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:6, flex:1, padding:"4px 8px" }}>
+                        <div style={{ fontSize:11, fontWeight:600, color:"var(--text3)", textAlign:"center", whiteSpace:"nowrap" }}>{s.label}</div>
+                        <div style={{ fontSize:32, fontWeight:800, color:s.color, lineHeight:1 }}>{fmtNum(s.count)}</div>
+                        <div style={{ fontSize:11, color:"var(--text3)", textAlign:"center" }}>
+                          <span style={{ color:s.color, fontWeight:700 }}>{s.pct.toFixed(0)}%</span> {s.pctLabel}
                         </div>
                       </div>
-                      {i < 3 && <div key={`sep-${i}`} style={{ background:"var(--border)", width:1, height:"60%", alignSelf:"center" }} />}
-                    </>
+                      {i < 4 && (
+                        <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:2, flexShrink:0, padding:"0 4px" }}>
+                          <div style={{ width:0, height:0, borderTop:"6px solid transparent", borderBottom:"6px solid transparent", borderLeft:`8px solid ${s.color}` }} />
+                        </div>
+                      )}
+                    </div>
                   ))}
                 </div>
               </div>

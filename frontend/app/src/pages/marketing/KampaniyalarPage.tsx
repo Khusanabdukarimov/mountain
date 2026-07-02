@@ -307,7 +307,7 @@ export default function KampaniyalarPage() {
   const [filterTargetologs, setFilterTargetologs] = useState<string[]>([]);
   const [filterCampaigns, setFilterCampaigns] = useState<string[]>([]);
   const [filterPlatforms, setFilterPlatforms] = useState<string[]>([]);
-  const [filterForm,      setFilterForm]      = useState("");
+  const [filterForm,      setFilterForm]      = useState<string[]>([]);
   const [filterAdsets,    setFilterAdsets]    = useState<string[]>([]);
   const [filterCreatives, setFilterCreatives] = useState<string[]>([]);
   const [expandedCreative, setExpandedCreative] = useState<string | null>(null);
@@ -402,11 +402,11 @@ export default function KampaniyalarPage() {
   // adsets feed each lead form), so the Forma filter can reach rows/creatives
   // even though those data sources have no form_id of their own.
   const formAdsetNames = useMemo(() => {
-    if (!filterForm) return null;
+    if (filterForm.length === 0) return null;
     const set = new Set<string>();
     for (const camp of formsQ.data?.campaigns ?? []) {
       for (const f of camp.forms) {
-        if (f.form_name === filterForm && f.adset_name) set.add(f.adset_name);
+        if (filterForm.includes(f.form_name) && f.adset_name) set.add(f.adset_name);
       }
     }
     return set;
@@ -435,7 +435,7 @@ export default function KampaniyalarPage() {
   [allRows, targetologCampSet, filterCampaigns, filterPlatforms, filterAdsets, formAdsetNames, creativeAdsetNames]);
 
   // ── aggregate KPIs from filtered rows (date-range + filter aware) ────────────
-  const isFiltered = !!(filterTargetologs.length || filterCampaigns.length || filterPlatforms.length || filterAdsets.length || filterForm || filterCreatives.length);
+  const isFiltered = !!(filterTargetologs.length || filterCampaigns.length || filterPlatforms.length || filterAdsets.length || filterForm.length || filterCreatives.length);
 
   const totalSpend  = rows.reduce((a, r) => a + r.spend,       0);
   const totalClicks = rows.reduce((a, r) => a + r.clicks,      0);
@@ -497,7 +497,7 @@ export default function KampaniyalarPage() {
 
     return [...seen.values()]
       .filter(f => !search || f.form_name.toLowerCase().includes(search.toLowerCase()))
-      .filter(f => !filterForm || f.form_name === filterForm)
+      .filter(f => filterForm.length === 0 || filterForm.includes(f.form_name))
       .filter(f => {
         const camps = formsQ.data?.campaigns ?? [];
         if (targetologCampSet) {
@@ -521,7 +521,7 @@ export default function KampaniyalarPage() {
     for (const camp of formsQ.data?.campaigns ?? []) {
       if (filterCampaigns.length > 0 && !filterCampaigns.includes(camp.campaign_name)) continue;
       for (const f of camp.forms) {
-        if (filterForm && f.form_name !== filterForm) continue;
+        if (filterForm.length > 0 && !filterForm.includes(f.form_name)) continue;
         // Collect all adsets this form uses (API returns adset_names[] when form spans multiple adsets)
         const names: string[] = (f as any).adset_names?.length ? (f as any).adset_names : f.adset_name ? [f.adset_name] : [];
         const filtered = filterAdsets.length > 0 ? names.filter(n => filterAdsets.includes(n)) : names;
@@ -636,9 +636,9 @@ export default function KampaniyalarPage() {
 
       {/* ── Filter panel ─────────────────────────────────────────────────────── */}
       {(() => {
-        const hasExtra = !!(filterTargetologs.length || filterCampaigns.length || filterPlatforms.length || filterForm || filterAdsets.length || filterCreatives.length);
+        const hasExtra = !!(filterTargetologs.length || filterCampaigns.length || filterPlatforms.length || filterForm.length || filterAdsets.length || filterCreatives.length);
         const selStyle: React.CSSProperties = { width: "100%", padding: "8px 10px", fontSize: 12, background: "var(--bg3)", border: "1px solid var(--border)", color: "var(--text)", borderRadius: 8 };
-        const clearAll = () => { setFilterTargetologs([]); setFilterCampaigns([]); setFilterPlatforms([]); setFilterForm(""); setFilterAdsets([]); setFilterCreatives([]); setSotuvFrom(""); setSotuvTo(""); setFromDate(getFirstOfMonth()); setToDate(getTodayIso()); };
+        const clearAll = () => { setFilterTargetologs([]); setFilterCampaigns([]); setFilterPlatforms([]); setFilterForm([]); setFilterAdsets([]); setFilterCreatives([]); setSotuvFrom(""); setSotuvTo(""); setFromDate(getFirstOfMonth()); setToDate(getTodayIso()); };
         return (
           <div style={{ background: "var(--bg2)", borderBottom: "1px solid var(--border)", overflow: filterOpen ? "visible" : "hidden", position: "sticky", top: 0, zIndex: 10 }}>
             <div style={{ padding: "10px 20px", display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}
@@ -706,19 +706,14 @@ export default function KampaniyalarPage() {
                 {/* Multi-select filters row 1 */}
                 <div style={{ display: "flex", gap: 12, flexWrap: "wrap", marginBottom: 12 }}>
                   <MultiSelect label="Targetolog" options={optTargetologs} values={filterTargetologs}
-                    onChange={v => { setFilterTargetologs(v); setFilterCampaigns([]); setFilterPlatforms([]); setFilterAdsets([]); setFilterForm(""); setFilterCreatives([]); }} />
+                    onChange={v => { setFilterTargetologs(v); setFilterCampaigns([]); setFilterPlatforms([]); setFilterAdsets([]); setFilterForm([]); setFilterCreatives([]); }} />
                   <MultiSelect label="Kampaniya" options={optCampaigns} values={filterCampaigns}
-                    onChange={v => { setFilterCampaigns(v); setFilterPlatforms([]); setFilterAdsets([]); setFilterForm(""); setFilterCreatives([]); }} />
+                    onChange={v => { setFilterCampaigns(v); setFilterPlatforms([]); setFilterAdsets([]); setFilterForm([]); setFilterCreatives([]); }} />
                   <MultiSelect label="Platforma" options={optPlatforms.map(p => p === "facebook" ? "Facebook" : "Instagram")}
                     values={filterPlatforms.map(p => p === "facebook" ? "Facebook" : "Instagram")}
                     onChange={v => { setFilterPlatforms(v.map(p => p === "Facebook" ? "facebook" : "instagram")); setFilterAdsets([]); setFilterCreatives([]); }} />
-                  <div style={{ flex: "1 1 180px", minWidth: 160 }}>
-                    <div style={{ fontSize: 11, color: "var(--text3)", marginBottom: 4 }}>Forma</div>
-                    <select value={filterForm} onChange={e => setFilterForm(e.target.value)} style={selStyle}>
-                      <option value="">Barchasi</option>
-                      {optForms.map(f => <option key={f} value={f}>{f}</option>)}
-                    </select>
-                  </div>
+                  <MultiSelect label="Forma" options={optForms} values={filterForm}
+                    onChange={v => { setFilterForm(v); }} />
                   <MultiSelect label="Adset" options={optAdsets} values={filterAdsets}
                     onChange={v => { setFilterAdsets(v); setFilterCreatives([]); }} />
                 </div>
@@ -1070,6 +1065,7 @@ export default function KampaniyalarPage() {
                   sifatli:            rows.reduce((a, r) => a + r.sifatli, 0),
                   konsultatsiya_otdi: rows.reduce((a, r) => a + (r.konsultatsiya_otdi ?? 0), 0),
                   sotuv_boldi:        rows.reduce((a, r) => a + (r.sotuv_boldi ?? 0), 0),
+                  sotuv_sum:          rows.reduce((a, r) => a + (r.sotuv_sum ?? 0), 0),
                   sifatsiz:           rows.reduce((a, r) => a + r.sifatsiz, 0),
                   bekor_boldi:        rows.reduce((a, r) => a + r.bekor_boldi, 0),
                   not_in_bitrix:      rows.reduce((a, r) => a + r.not_in_bitrix, 0),
@@ -1101,6 +1097,7 @@ export default function KampaniyalarPage() {
                           <th className={`${TH} text-right`}>SIFATLI</th>
                           <th className={`${TH} text-right`}>KONSULT.</th>
                           <th className={`${TH} text-right`}>SOTUV BO'LDI</th>
+                          <th className={`${TH} text-right`}>SOTUV SUMMASI</th>
                           <th className={`${TH} text-right`}>SIFATSIZ</th>
                           <th className={`${TH} text-right`}>BEKOR</th>
                           <th className={`${TH} text-right`}>YO'Q</th>
@@ -1111,13 +1108,13 @@ export default function KampaniyalarPage() {
                         {creativesQ.isLoading ? (
                           Array.from({ length: 5 }).map((_, i) => (
                             <tr key={i} className="border-b border-border">
-                              {Array.from({ length: 11 }).map((__, j) => (
+                              {Array.from({ length: 12 }).map((__, j) => (
                                 <td key={j} className={TD}><Skeleton className="h-3 w-14" /></td>
                               ))}
                             </tr>
                           ))
                         ) : filtered.length === 0 ? (
-                          <tr><td colSpan={11} className="px-4 py-10 text-center text-text3">Ma'lumot topilmadi</td></tr>
+                          <tr><td colSpan={12} className="px-4 py-10 text-center text-text3">Ma'lumot topilmadi</td></tr>
                         ) : filtered.map((r, ri) => {
                           const adKey = `${r.campaign_name}::${r.adset_name}::${ri}`;
                           const isExpAd    = expandedCreative === adKey;
@@ -1164,6 +1161,11 @@ export default function KampaniyalarPage() {
                                     {(r.sotuv_boldi ?? 0) || "—"}
                                   </span>
                                 </td>
+                                <td className={`${TD} text-right text-[11px]`}>
+                                  <span className={(r.sotuv_sum ?? 0) > 0 ? "text-[#22c55e]" : "text-text3"}>
+                                    {(r.sotuv_sum ?? 0) > 0 ? `$${Math.round(r.sotuv_sum).toLocaleString()}` : "—"}
+                                  </span>
+                                </td>
                                 <td className={`${TD} text-right text-[11px]`}><span className={r.sifatsiz > 0 ? "text-red/80" : "text-text3"}>{r.sifatsiz}</span></td>
                                 <td className={`${TD} text-right text-[11px]`}><span className={r.bekor_boldi > 0 ? "text-amber" : "text-text3"}>{r.bekor_boldi}</span></td>
                                 <td className={`${TD} text-right text-[11px] text-text3`}>{r.not_in_bitrix || "—"}</td>
@@ -1185,6 +1187,7 @@ export default function KampaniyalarPage() {
                             <td className={`${TD} text-right font-bold text-green`}>{totals.sifatli}</td>
                             <td className={`${TD} text-right font-bold`} style={{ color: "#a78bfa" }}>{totals.konsultatsiya_otdi}</td>
                             <td className={`${TD} text-right font-bold`} style={{ color: "#22c55e" }}>{totals.sotuv_boldi}</td>
+                            <td className={`${TD} text-right font-bold`} style={{ color: "#22c55e" }}>{totals.sotuv_sum > 0 ? `$${Math.round(totals.sotuv_sum).toLocaleString()}` : "—"}</td>
                             <td className={`${TD} text-right text-red/80`}>{totals.sifatsiz}</td>
                             <td className={`${TD} text-right text-amber`}>{totals.bekor_boldi}</td>
                             <td className={`${TD} text-right text-text3`}>{totals.not_in_bitrix}</td>
