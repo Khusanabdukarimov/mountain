@@ -1,8 +1,9 @@
 import { useMemo, useState, useRef, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
-  RefreshCw, Search, ChevronDown, TrendingUp, Filter, X,
+  RefreshCw, Search, ChevronDown, TrendingUp, Filter, X, Download,
 } from "lucide-react";
+import * as XLSX from "xlsx";
 import { Skeleton } from "@/components/Skeleton";
 import {
   getMetaInsights, getMetaCampaigns, getCampaignForms, getFormLeads,
@@ -1085,7 +1086,65 @@ export default function KampaniyalarPage() {
 
                 const totals = agg(filtered);
 
+                function downloadExcel() {
+                  const rows = filtered.map(r => ({
+                    "Creative":        r.ad_name ?? "Nomsiz ad",
+                    "Kampaniya":       r.campaign_name,
+                    "Adset":           r.adset_name,
+                    "Sarf ($)":        +r.spend.toFixed(2),
+                    "Meta Lidlar":     r.meta_leads,
+                    "Bitrix24":        r.in_bitrix,
+                    "Sifatli":         r.sifatli,
+                    "Konsultatsiya":   r.konsultatsiya_otdi ?? 0,
+                    "Sotuv bo'ldi":    r.sotuv_boldi ?? 0,
+                    "Sotuv summasi ($)": +(r.sotuv_sum ?? 0).toFixed(2),
+                    "Sifatsiz":        r.sifatsiz,
+                    "Bekor":           r.bekor_boldi,
+                    "Yo'q":            r.not_in_bitrix,
+                    "Sifat %":         r.sifat_rate,
+                  }));
+                  rows.push({
+                    "Creative":        "JAMI",
+                    "Kampaniya":       "",
+                    "Adset":           "",
+                    "Sarf ($)":        +totals.spend.toFixed(2),
+                    "Meta Lidlar":     totals.meta_leads,
+                    "Bitrix24":        totals.in_bitrix,
+                    "Sifatli":         totals.sifatli,
+                    "Konsultatsiya":   totals.konsultatsiya_otdi,
+                    "Sotuv bo'ldi":    totals.sotuv_boldi,
+                    "Sotuv summasi ($)": +totals.sotuv_sum.toFixed(2),
+                    "Sifatsiz":        totals.sifatsiz,
+                    "Bekor":           totals.bekor_boldi,
+                    "Yo'q":            totals.not_in_bitrix,
+                    "Sifat %":         0,
+                  });
+                  const ws = XLSX.utils.json_to_sheet(rows);
+                  ws["!cols"] = [
+                    { wch: 40 }, { wch: 30 }, { wch: 30 }, { wch: 10 },
+                    { wch: 12 }, { wch: 10 }, { wch: 10 }, { wch: 14 },
+                    { wch: 14 }, { wch: 18 }, { wch: 10 }, { wch: 8 },
+                    { wch: 8 },  { wch: 8 },
+                  ];
+                  const wb = XLSX.utils.book_new();
+                  XLSX.utils.book_append_sheet(wb, ws, "Creative Performance");
+                  const dateStr = `${fromDate}_${toDate}`;
+                  XLSX.writeFile(wb, `creative_performance_${dateStr}.xlsx`);
+                }
+
                 return (
+                  <>
+                  {filtered.length > 0 && (
+                    <div className="flex justify-end px-4 py-2 border-b border-border">
+                      <button
+                        onClick={downloadExcel}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-text3 hover:bg-bg3 hover:text-text transition-colors text-[12px]"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        Excel yuklab olish
+                      </button>
+                    </div>
+                  )}
                   <div className="overflow-x-auto">
                     <table className="w-full text-[12px]" style={{ borderCollapse: "collapse" }}>
                       <thead>
@@ -1197,6 +1256,7 @@ export default function KampaniyalarPage() {
                       )}
                     </table>
                   </div>
+                  </>
                 );
               })()}
             </div>
