@@ -26,7 +26,7 @@ type MetricKey =
   | "budget" | "leads" | "qual_leads" | "meetings"
   | "deals"  | "deals_sum" | "sales_count" | "sales_sum" | "cancelled"
   | "tolangan"
-  | "roas" | "qual_lead_cost" | "customer_cost";
+  | "roas" | "qual_lead_cost" | "qual_conversion" | "customer_cost";
 
 type MetricDef = {
   key: MetricKey;
@@ -39,8 +39,9 @@ const METRICS: MetricDef[] = [
   { key: "budget",         label: "Byudjet ($)",          format: "money" },
   { key: "leads",          label: "Lidlar soni",          format: "num"   },
   { key: "qual_leads",     label: "Maqsadli lidlar soni", format: "num"   },
-  { key: "qual_lead_cost", label: "Maqsadli lid narxi",   format: "money", computed: true },
-  { key: "meetings",       label: "Uchrashuvlar soni",    format: "num"   },
+  { key: "qual_lead_cost",   label: "Maqsadli lid narxi",       format: "money", computed: true },
+  { key: "qual_conversion",  label: "Maqsadli lid konversiya",  format: "pct",   computed: true },
+  { key: "meetings",         label: "Uchrashuvlar soni",        format: "num"   },
   { key: "deals",          label: "Kelishuvlar soni",     format: "num"   },
   { key: "deals_sum",      label: "Kelishuvlar summasi",  format: "money" },
   { key: "sales_count",    label: "Sotuvlar soni",        format: "num"   },
@@ -214,6 +215,10 @@ export default function KunlikPage() {
         const bg = field("budget", b.budget), q = field("qual_leads", b.qual_leads);
         return q > 0 ? bg / q : 0;
       }
+      case "qual_conversion": {
+        const l = field("leads", b.leads), q = field("qual_leads", b.qual_leads);
+        return l > 0 ? (q / l) * 100 : 0;
+      }
       case "customer_cost": {
         const bg = field("budget", b.budget), sc = field("sales_count", b.sales_count);
         return sc > 0 ? bg / sc : 0;
@@ -234,6 +239,10 @@ export default function KunlikPage() {
       case "qual_lead_cost": {
         const bg = sumField("budget"), q = sumField("qual_leads");
         return q > 0 ? bg / q : 0;
+      }
+      case "qual_conversion": {
+        const l = sumField("leads"), q = sumField("qual_leads");
+        return l > 0 ? (q / l) * 100 : 0;
       }
       case "customer_cost": {
         const bg = sumField("budget"), sc = sumField("sales_count");
@@ -292,6 +301,8 @@ export default function KunlikPage() {
         return b.budget[i] > 0 ? (b.sales_sum[i] / b.budget[i]) * 100 : 0;
       case "qual_lead_cost":
         return b.qual_leads[i] > 0 ? b.budget[i] / b.qual_leads[i] : 0;
+      case "qual_conversion":
+        return b.leads[i] > 0 ? (b.qual_leads[i] / b.leads[i]) * 100 : 0;
       case "customer_cost":
         return b.sales_count[i] > 0 ? b.budget[i] / b.sales_count[i] : 0;
     }
@@ -323,6 +334,11 @@ export default function KunlikPage() {
       case "qual_lead_cost": {
         const q = js ? js.qual_leads : b.qual_leads.reduce((a,v)=>a+v,0);
         return q > 0 ? bg / q : 0;
+      }
+      case "qual_conversion": {
+        const l = js ? js.total_leads : b.leads.reduce((a,v)=>a+v,0);
+        const q = js ? js.qual_leads  : b.qual_leads.reduce((a,v)=>a+v,0);
+        return l > 0 ? (q / l) * 100 : 0;
       }
       case "customer_cost": {
         const sc = js ? js.total_sales : b.sales_count.reduce((a,v)=>a+v,0);
