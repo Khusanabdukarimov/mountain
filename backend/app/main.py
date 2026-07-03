@@ -701,7 +701,7 @@ def api_marketing_bitrix_daily(month: str, year: int):
 
 
 @app.get("/api/marketing/kunlik")
-def api_marketing_kunlik(month: str, year: int, targetolog: str = "all"):
+def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", responsible_id: str = ""):
     """Daily CRM metrics from Bitrix24 — Facebook (target) and Instagram only.
 
     Metrics per section (target / instagram), per day array:
@@ -735,6 +735,10 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all"):
     # Target source_id in Bitrix24 = UC_89FPH6
     TARGET_SRC = "UC_89FPH6"
 
+    resp_ids = [int(x) for x in responsible_id.split(",") if x.strip().isdigit()] if responsible_id else []
+    resp_lead = "AND l.responsible_id = ANY(:resp_ids)" if resp_ids else ""
+    resp_deal = "AND d.responsible_id = ANY(:resp_ids)" if resp_ids else ""
+
     targ_keys = [t.strip().lower() for t in targetolog.split(",") if t.strip() and t.strip() != "all"]
 
     # Fetch campaign assignments from DB (no pattern logic — DB is sole source of truth)
@@ -765,6 +769,8 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all"):
     with _bxe.connect() as conn:
         # ── LEAD metrics ──────────────────────────────────────────────
         lead_params: dict = {"since": since, "until": until, "src": TARGET_SRC}
+        if resp_ids:
+            lead_params["resp_ids"] = resp_ids
         lead_campaign_filter = _build_campaign_filter("l", lead_params)
 
         lead_sql = _text(f"""
@@ -779,6 +785,7 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all"):
             WHERE l.date_create::date BETWEEN :since AND :until
               AND l.source_id = :src
               {lead_campaign_filter}
+              {resp_lead}
             GROUP BY 1, 2, 3, 4
         """)
         for day, stage_bid, is_final, is_won, cnt in conn.execute(lead_sql, lead_params):
@@ -793,6 +800,8 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all"):
 
         # ── DEAL metrics (meetings, shartnoma) by date_create ───────────
         deal_params: dict = {"since": since, "until": until, "src": TARGET_SRC}
+        if resp_ids:
+            deal_params["resp_ids"] = resp_ids
         deal_campaign_filter = _build_campaign_filter("l_deal", deal_params)
 
         deal_sql = _text(f"""
@@ -807,6 +816,7 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all"):
             WHERE d.date_create::date BETWEEN :since AND :until
               AND d.source_id = :src
               {deal_campaign_filter}
+              {resp_deal}
         """)
         for day, stage_bid, is_won, opp in conn.execute(deal_sql, deal_params):
             if day is None or day < 1 or day > days_in_month:
@@ -821,6 +831,8 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all"):
         # ── SALES metrics by uf_bp_sale_date via facebook_leads match ──
         # Same attribution as Kampaniya page: Path A (lead_phones) + Path B (deal_phones)
         sale_params: dict = {"since": since, "until": until}
+        if resp_ids:
+            sale_params["resp_ids"] = resp_ids
 
         # Build campaign IN clause for both EXISTS subqueries
         if targ_keys and _assigned_campaigns:
@@ -848,6 +860,7 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all"):
                 FROM deals d
                 JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
                 WHERE d.uf_bp_sale_date::date BETWEEN :since AND :until
+                  {resp_deal}
                   AND (
                     EXISTS (
                       SELECT 1 FROM leads le
@@ -871,7 +884,7 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all"):
             """)
         else:
             # No targetolog filter: all won Target deals (matched + unmatched)
-            sale_sql = _text("""
+            sale_sql = _text(f"""
                 SELECT
                     EXTRACT(DAY FROM d.uf_bp_sale_date AT TIME ZONE 'Asia/Tashkent')::int AS day,
                     CASE WHEN d.currency_id = 'USD' THEN COALESCE(d.opportunity, 0) ELSE 0 END AS opp
@@ -879,6 +892,7 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all"):
                 JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
                 WHERE d.uf_bp_sale_date::date BETWEEN :since AND :until
                   AND d.source_id = :src
+                  {resp_deal}
             """)
             sale_params["src"] = TARGET_SRC
         for day, opp in conn.execute(sale_sql, sale_params):
@@ -889,7 +903,10 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all"):
             result["target"]["sales_sum"][idx] += float(opp)
 
         # ── UNMATCHED sales (won Target deals NOT linked to any FB campaign) ──
-        unmatched_sql = _text("""
+        unmatched_params = {"since": since, "until": until, "src": TARGET_SRC}
+        if resp_ids:
+            unmatched_params["resp_ids"] = resp_ids
+        unmatched_sql = _text(f"""
             SELECT
                 EXTRACT(DAY FROM d.uf_bp_sale_date AT TIME ZONE 'Asia/Tashkent')::int AS day,
                 CASE WHEN d.currency_id = 'USD' THEN COALESCE(d.opportunity, 0) ELSE 0 END AS opp
@@ -897,6 +914,7 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all"):
             JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
             WHERE d.uf_bp_sale_date::date BETWEEN :since AND :until
               AND d.source_id = :src
+              {resp_deal}
               AND NOT EXISTS (
                 SELECT 1 FROM leads le
                 JOIN lead_phones lp ON lp.lead_id = le.id
@@ -914,7 +932,7 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all"):
                 WHERE dp.deal_id = d.id
               )
         """)
-        for day, opp in conn.execute(unmatched_sql, {"since": since, "until": until, "src": TARGET_SRC}):
+        for day, opp in conn.execute(unmatched_sql, unmatched_params):
             if day is None or day < 1 or day > days_in_month:
                 continue
             idx = int(day) - 1
