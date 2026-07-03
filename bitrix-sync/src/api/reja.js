@@ -378,7 +378,7 @@ router.get('/plans/:id/distribution', async (req, res) => {
         JOIN stages s ON s.id = d.stage_id
         WHERE d.responsible_id = ANY($1)
           AND d.uf_paid_sum IS NOT NULL AND d.uf_paid_sum > 0
-          AND NOT (s.is_final = true AND s.is_won = false)
+          AND s.is_won = true
           AND COALESCE(d.uf_bp_sale_date, d.uf_payment_date, d.date_create)::date BETWEEN $2 AND $3
           AND d.id NOT IN (SELECT DISTINCT deal_id FROM deal_payments)
       ) sub
