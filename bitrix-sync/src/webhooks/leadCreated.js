@@ -72,7 +72,12 @@ async function leadCreated(req, res) {
     // Only skip distribution for leads created by our own Facebook API webhook
     const isFbApiSource = ['UC_O9BLGT', 'UC_3O8GTF'].includes(raw.SOURCE_ID);
 
-    if (!isAmoCRM && !isCallsStage && isMainResponsible && !isFbApiSource) {
+    // Website forma (REPEAT_SALE) leads assigned to Shaxzod Turanov (#28)
+    // are routed through him but must still be distributed via taqsimot logic
+    const isWebsiteFormaRouter =
+      raw.SOURCE_ID === 'REPEAT_SALE' && assignedId === 28;
+
+    if (!isAmoCRM && !isCallsStage && (isMainResponsible || isWebsiteFormaRouter) && !isFbApiSource) {
       const assignedTo = await distributeLead(entityId);
       if (assignedTo) {
         console.log(`[leadCreated] Lead ${entityId} distributed to responsible ${assignedTo}`);
