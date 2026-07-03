@@ -527,7 +527,7 @@ router.get('/deals-stats', async (req, res) => {
       FROM deals d2
       JOIN stages s2 ON s2.id = d2.stage_id
       WHERE d2.uf_paid_sum IS NOT NULL AND d2.uf_paid_sum > 0
-        AND NOT (s2.is_final = true AND s2.is_won = false)
+        AND s2.is_won = true
         AND COALESCE(d2.uf_bp_sale_date, d2.uf_payment_date, d2.date_create)::date BETWEEN $1::date AND $2::date
         AND d2.id NOT IN (SELECT DISTINCT deal_id FROM deal_payments)
         ${extraPay.join(' ')}
