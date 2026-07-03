@@ -170,8 +170,9 @@ export type KunlikJamiStats = {
   total_paid: number;
 };
 
-export function getKunlikJamiStats(month: MonthKey, year: number) {
-  return apiGet<KunlikJamiStats>('/api/marketing/kunlik-jami-stats', { month, year });
+export function getKunlikJamiStats(month: MonthKey, year: number, responsibleIds: number[] = []) {
+  const responsible_id = responsibleIds.length > 0 ? responsibleIds.join(',') : undefined;
+  return apiGet<KunlikJamiStats>('/api/marketing/kunlik-jami-stats', { month, year, responsible_id });
 }
 
 export function saveKunlikPlan(section: string, metric_key: string, month: MonthKey, year: number, value: number) {

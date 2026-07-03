@@ -1235,7 +1235,7 @@ def api_marketing_kunlik_segment(section_id: int, month: str, year: int, respons
 
 
 @app.get("/api/marketing/kunlik-jami-stats")
-def api_marketing_kunlik_jami_stats(month: str, year: int):
+def api_marketing_kunlik_jami_stats(month: str, year: int, responsible_id: str = ""):
     """Overall monthly totals for ALL CRM sources — used for Jami tab FAKT column."""
     import calendar as _cal
     MONTH_MAP = {
@@ -1248,8 +1248,15 @@ def api_marketing_kunlik_jami_stats(month: str, year: int):
     last_day = _cal.monthrange(year, m)[1]
     until = date(year, m, last_day)
 
+    resp_ids = [int(x) for x in responsible_id.split(",") if x.strip().isdigit()] if responsible_id else []
+    resp_lead = "AND l.responsible_id = ANY(:resp_ids)" if resp_ids else ""
+    resp_deal = "AND d.responsible_id = ANY(:resp_ids)" if resp_ids else ""
+    p: dict = {"since": since, "until": until}
+    if resp_ids:
+        p["resp_ids"] = resp_ids
+
     with bx_engine.connect() as conn:
-        leads_row = conn.execute(text("""
+        leads_row = conn.execute(text(f"""
             SELECT
                 COUNT(*)                                                                    AS total_leads,
                 COUNT(*) FILTER (WHERE s.bitrix_id IN (
@@ -1259,9 +1266,10 @@ def api_marketing_kunlik_jami_stats(month: str, year: int):
             FROM leads l
             LEFT JOIN stages s ON s.id = l.stage_id AND s.entity = 'lead'
             WHERE l.date_create::date BETWEEN :since AND :until
-        """), {"since": since, "until": until}).fetchone()
+            {resp_lead}
+        """), p).fetchone()
 
-        deals_row = conn.execute(text("""
+        deals_row = conn.execute(text(f"""
             SELECT
                 COUNT(*)                                                                    AS total_deals,
                 COALESCE(SUM(CASE WHEN d.currency_id = 'USD' THEN d.opportunity ELSE 0 END), 0) AS deals_sum
@@ -1269,18 +1277,20 @@ def api_marketing_kunlik_jami_stats(month: str, year: int):
             LEFT JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal'
             WHERE d.date_create::date BETWEEN :since AND :until
               AND (s.bitrix_id = 'UC_W35V62' OR s.is_won = true)
-        """), {"since": since, "until": until}).fetchone()
+            {resp_deal}
+        """), p).fetchone()
 
-        sales_row = conn.execute(text("""
+        sales_row = conn.execute(text(f"""
             SELECT
                 COUNT(*)                                                                    AS total_sales,
                 COALESCE(SUM(CASE WHEN d.currency_id = 'USD' THEN d.opportunity ELSE 0 END), 0) AS sales_sum
             FROM deals d
             JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
             WHERE d.uf_bp_sale_date::date BETWEEN :since AND :until
-        """), {"since": since, "until": until}).fetchone()
+            {resp_deal}
+        """), p).fetchone()
 
-        paid_row = conn.execute(text("""
+        paid_row = conn.execute(text(f"""
             SELECT COALESCE(SUM(sub.amount), 0) AS total_paid
             FROM (
                 SELECT p.amount_usd AS amount
@@ -1289,6 +1299,7 @@ def api_marketing_kunlik_jami_stats(month: str, year: int):
                 JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal'
                 WHERE NOT (s.is_final = true AND s.is_won = false)
                   AND p.paid_at BETWEEN :since AND :until
+                  {resp_deal}
                 UNION ALL
                 SELECT d.uf_paid_sum AS amount
                 FROM deals d
@@ -1297,8 +1308,9 @@ def api_marketing_kunlik_jami_stats(month: str, year: int):
                   AND NOT (s.is_final = true AND s.is_won = false)
                   AND COALESCE(d.uf_bp_sale_date, d.uf_payment_date, d.date_create)::date BETWEEN :since AND :until
                   AND d.id NOT IN (SELECT DISTINCT deal_id FROM deal_payments)
+                  {resp_deal}
             ) sub
-        """), {"since": since, "until": until}).fetchone()
+        """), p).fetchone()
 
     return {
         "month": month,

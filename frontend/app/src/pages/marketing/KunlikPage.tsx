@@ -118,8 +118,8 @@ export default function KunlikPage() {
   const qSections = useQuery({ queryKey: ["kunlik-sections"], queryFn: getKunlikSections, staleTime: Infinity });
 
   const qJamiStats = useQuery({
-    queryKey: ["kunlik-jami-stats", month, year],
-    queryFn: () => getKunlikJamiStats(month, year),
+    queryKey: ["kunlik-jami-stats", month, year, masulIds],
+    queryFn: () => getKunlikJamiStats(month, year, masulIds),
     staleTime: 60_000,
   });
 
