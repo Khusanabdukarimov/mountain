@@ -716,13 +716,13 @@ function CreateSectionModal({ onClose, onCreated }: { onClose: () => void; onCre
     staleTime: Infinity,
   });
   const ALLOWED_SOURCES = new Set([
-    "UC_3O8GTF", // Instagram
-    "UC_BU2WXB", // Networking
-    "UC_Y6RAXP", // Qayta sotuv (LTV)
-    "UC_BOJPCA", // Sovuq qo'ng'iroq
-    "UC_P8729J", // Tavsiya orqali (NPS)
-    "UC_89FPH6", // Target
-    "UC_0QF8D1", // Veb sayt
+    "UC_3O8GTF",   // Instagram
+    "UC_BU2WXB",   // Networking
+    "UC_Y6RAXP",   // Qayta sotuv (LTV)
+    "UC_BOJPCA",   // Sovuq qo'ng'iroq
+    "UC_P8729J",   // Tavsiya orqali (NPS)
+    "UC_89FPH6",   // Target
+    "REPEAT_SALE", // Website forma
   ]);
   const options = (manbaData?.options ?? []).filter(o => ALLOWED_SOURCES.has(o.id));
 
