@@ -39,6 +39,7 @@ const METRICS: MetricDef[] = [
   { key: "budget",         label: "Byudjet ($)",          format: "money" },
   { key: "leads",          label: "Lidlar soni",          format: "num"   },
   { key: "qual_leads",     label: "Maqsadli lidlar soni", format: "num"   },
+  { key: "qual_lead_cost", label: "Maqsadli lid narxi",   format: "money", computed: true },
   { key: "meetings",       label: "Uchrashuvlar soni",    format: "num"   },
   { key: "deals",          label: "Kelishuvlar soni",     format: "num"   },
   { key: "deals_sum",      label: "Kelishuvlar summasi",  format: "money" },
@@ -46,7 +47,6 @@ const METRICS: MetricDef[] = [
   { key: "sales_sum",      label: "Sotuvlar summasi",     format: "money" },
   { key: "cancelled",      label: "Bekor bo'ldi",         format: "num"   },
   { key: "roas",           label: "ROAS",                 format: "pct",  computed: true },
-  { key: "qual_lead_cost", label: "Maqsadli lid narxi",   format: "money", computed: true },
   { key: "customer_cost",  label: "Mijoz narxi",          format: "money", computed: true },
 ];
 
