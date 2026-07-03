@@ -80,6 +80,8 @@ export default function KunlikPage() {
   const [year,         setYear]         = useState(DEFAULT_YEAR);
   const [active,       setActive]       = useState<string>("jami");
   const [targetologs,  setTargetologs]  = useState<string[]>([]);
+  const [masulIds,     setMasulIds]     = useState<number[]>([]);
+  const [mDropOpen,    setMDropOpen]    = useState(false);
 
   const [showModal,    setShowModal]    = useState(false);
   const [filterOpen,   setFilterOpen]   = useState(false);
@@ -111,7 +113,7 @@ export default function KunlikPage() {
   const isCurrent = isCurrentMonth(month, year);
 
   const qMeta     = useQuery({ queryKey: ["meta/insights", month, year, targetologs], queryFn: () => getMetaInsights(month, year, undefined, false, undefined, undefined, targetologs) });
-  const qCrm      = useQuery({ queryKey: ["marketing/kunlik", month, year, targetologs], queryFn: () => getKunlikHisobot(month, year, targetologs) });
+  const qCrm      = useQuery({ queryKey: ["marketing/kunlik", month, year, targetologs, masulIds], queryFn: () => getKunlikHisobot(month, year, targetologs, masulIds) });
   const qPlan     = useQuery({ queryKey: ["marketing/kunlik-meta", month, year], queryFn: () => getKunlikMeta(month, year) });
   const qSections = useQuery({ queryKey: ["kunlik-sections"], queryFn: getKunlikSections, staleTime: Infinity });
 
@@ -125,8 +127,8 @@ export default function KunlikPage() {
 
   const customSegmentQueries = useQueries({
     queries: customSections.map(sec => ({
-      queryKey: ["kunlik-segment", sec.id, month, year],
-      queryFn:  () => getKunlikSegment(sec.id, month, year),
+      queryKey: ["kunlik-segment", sec.id, month, year, masulIds],
+      queryFn:  () => getKunlikSegment(sec.id, month, year, masulIds),
       staleTime: 30_000,
     })),
   });
@@ -337,9 +339,19 @@ export default function KunlikPage() {
     { value: "islomiddin", label: "Islomiddin" },
     { value: "dilmurod",   label: "Dilmurod"   },
   ];
+  const MASUL_OPTIONS = [
+    { value: 16, label: "Davlatyor" },
+    { value: 32, label: "Temurmalik Xoshimjonov" },
+    { value: 12, label: "Muhriddin Atoullayev" },
+    { value: 18, label: "Samandar Samadov" },
+    { value: 14, label: "Bekzod Ergashev" },
+    { value: 22, label: "Shahzod Yormamatov" },
+  ];
   const toggleTargetolog = (v: string) =>
     setTargetologs(prev => prev.includes(v) ? prev.filter(x => x !== v) : [...prev, v]);
-  const activeFilterCount = targetologs.length;
+  const toggleMasul = (v: number) =>
+    setMasulIds(prev => prev.includes(v) ? prev.filter(x => x !== v) : [...prev, v]);
+  const activeFilterCount = targetologs.length + masulIds.length;
   const targetologSummary = targetologs.length === 0
     ? ""
     : ` · ${targetologs.map(t => TARGETOLOG_OPTIONS.find(o => o.value === t)?.label ?? t).join(", ")}`;
@@ -401,7 +413,7 @@ export default function KunlikPage() {
             </div>
 
             {/* Filter fields */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
               {/* Oy */}
               <div>
                 <label className="block text-[11px] font-semibold text-text3 mb-1.5">Oy</label>
@@ -482,12 +494,60 @@ export default function KunlikPage() {
                   </div>
                 )}
               </div>
+
+              {/* Mas'ul multi-select */}
+              <div className="relative" onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setMDropOpen(false); }} tabIndex={-1}>
+                <label className="block text-[11px] font-semibold text-text3 mb-1.5">Mas'ul</label>
+                <button
+                  type="button"
+                  onClick={() => setMDropOpen(o => !o)}
+                  className={cn(
+                    "w-full flex items-center justify-between px-3 py-2 rounded-lg bg-bg border text-[12.5px] text-left outline-none transition-colors",
+                    masulIds.length > 0 ? "border-blue text-blue" : "border-border text-text",
+                  )}
+                >
+                  <span className="truncate">
+                    {masulIds.length === 0
+                      ? "Barchasi"
+                      : masulIds.length === 1
+                        ? MASUL_OPTIONS.find(o => o.value === masulIds[0])?.label
+                        : `${masulIds.length} ta tanlangan`}
+                  </span>
+                  <ChevronDown size={13} className={cn("shrink-0 ml-2 transition-transform", mDropOpen && "rotate-180")} />
+                </button>
+                {mDropOpen && (
+                  <div className="absolute top-[calc(100%+4px)] left-0 w-full bg-bg2 border border-border rounded-lg shadow-lg z-50 overflow-hidden">
+                    {masulIds.length > 0 && (
+                      <div className="px-3 py-1.5 border-b border-border">
+                        <button type="button" onClick={() => setMasulIds([])} className="text-[11px] text-text3 hover:text-text">
+                          Hammasini olib tashlash
+                        </button>
+                      </div>
+                    )}
+                    {MASUL_OPTIONS.map(opt => {
+                      const checked = masulIds.includes(opt.value);
+                      return (
+                        <label
+                          key={opt.value}
+                          className={cn(
+                            "flex items-center gap-2.5 px-3 py-2 cursor-pointer text-[12.5px] hover:bg-bg3 transition-colors",
+                            checked ? "bg-blue-bg text-blue" : "text-text",
+                          )}
+                        >
+                          <input type="checkbox" checked={checked} onChange={() => toggleMasul(opt.value)} className="accent-blue shrink-0" />
+                          {opt.label}
+                        </label>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Tozalash */}
             <div className="flex justify-end mt-3">
               <button
-                onClick={() => { setMonth(DEFAULT_MONTH); setYear(DEFAULT_YEAR); setTargetologs([]); setTDropOpen(false); }}
+                onClick={() => { setMonth(DEFAULT_MONTH); setYear(DEFAULT_YEAR); setTargetologs([]); setTDropOpen(false); setMasulIds([]); setMDropOpen(false); }}
                 className="text-[12px] text-text3 hover:text-text px-3 py-1 rounded border border-border hover:bg-bg3 transition-colors"
               >
                 Tozalash
@@ -655,7 +715,16 @@ function CreateSectionModal({ onClose, onCreated }: { onClose: () => void; onCre
     queryFn:  () => getUfFieldOptions("SOURCE_ID"),
     staleTime: Infinity,
   });
-  const options = manbaData?.options ?? [];
+  const ALLOWED_SOURCES = new Set([
+    "UC_3O8GTF", // Instagram
+    "UC_BU2WXB", // Networking
+    "UC_Y6RAXP", // Qayta sotuv (LTV)
+    "UC_BOJPCA", // Sovuq qo'ng'iroq
+    "UC_P8729J", // Tavsiya orqali (NPS)
+    "UC_89FPH6", // Target
+    "UC_0QF8D1", // Veb sayt
+  ]);
+  const options = (manbaData?.options ?? []).filter(o => ALLOWED_SOURCES.has(o.id));
 
   const handleSelect = (id: string) => {
     const prev = options.find(o => o.id === selected)?.label ?? "";

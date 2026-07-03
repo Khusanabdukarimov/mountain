@@ -1117,7 +1117,7 @@ def delete_kunlik_section(section_id: int):
 
 
 @app.get("/api/marketing/kunlik-segment")
-def api_marketing_kunlik_segment(section_id: int, month: str, year: int):
+def api_marketing_kunlik_segment(section_id: int, month: str, year: int, responsible_id: str = ""):
     """Return per-day metrics for a custom section filtered by uf_service values."""
     from app.models import KunlikCustomSection
     from app.db_bx import bx_engine as _bxe
@@ -1141,6 +1141,10 @@ def api_marketing_kunlik_segment(section_id: int, month: str, year: int):
     since = f"{year}-{month_num:02d}-01"
     until = f"{year}-{month_num:02d}-{days_in_month:02d}"
 
+    resp_ids = [int(x) for x in responsible_id.split(",") if x.strip().isdigit()] if responsible_id else []
+    resp_filter_lead = "AND l.responsible_id = ANY(:resp_ids)" if resp_ids else ""
+    resp_filter_deal = "AND d.responsible_id = ANY(:resp_ids)" if resp_ids else ""
+
     _METRICS = ["leads", "qual_leads", "meetings", "deals", "deals_sum", "sales_count", "sales_sum", "cancelled"]
     result = {m: [0.0] * days_in_month for m in _METRICS}
 
@@ -1159,9 +1163,12 @@ def api_marketing_kunlik_segment(section_id: int, month: str, year: int):
                 JOIN stages s ON s.id = l.stage_id AND s.entity = 'lead'
                 WHERE l.date_create::date BETWEEN :since AND :until
                   AND l.{lead_col} = ANY(:names)
+                  {resp_filter_lead}
                 GROUP BY 1, 2
             """)
-            for day, stage_bid, cnt in conn.execute(lead_sql, {"since": since, "until": until, "names": source_names}):
+            params = {"since": since, "until": until, "names": source_names}
+            if resp_ids: params["resp_ids"] = resp_ids
+            for day, stage_bid, cnt in conn.execute(lead_sql, params):
                 if day < 1 or day > days_in_month:
                     continue
                 idx = int(day) - 1
@@ -1183,8 +1190,11 @@ def api_marketing_kunlik_segment(section_id: int, month: str, year: int):
                 JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal'
                 WHERE d.date_create::date BETWEEN :since AND :until
                   AND d.{deal_col} = ANY(:names)
+                  {resp_filter_deal}
             """)
-            for day, stage_bid, is_won, opp in conn.execute(deal_sql, {"since": since, "until": until, "names": source_names}):
+            params = {"since": since, "until": until, "names": source_names}
+            if resp_ids: params["resp_ids"] = resp_ids
+            for day, stage_bid, is_won, opp in conn.execute(deal_sql, params):
                 if day < 1 or day > days_in_month:
                     continue
                 idx = int(day) - 1
@@ -1206,8 +1216,11 @@ def api_marketing_kunlik_segment(section_id: int, month: str, year: int):
                 JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
                 WHERE d.uf_bp_sale_date::date BETWEEN :since AND :until
                   AND d.{deal_col} = ANY(:names)
+                  {resp_filter_deal}
             """)
-            for day, opp in conn.execute(sales_sql, {"since": since, "until": until, "names": source_names}):
+            params = {"since": since, "until": until, "names": source_names}
+            if resp_ids: params["resp_ids"] = resp_ids
+            for day, opp in conn.execute(sales_sql, params):
                 if day is None or day < 1 or day > days_in_month:
                     continue
                 idx = int(day) - 1

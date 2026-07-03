@@ -40,7 +40,7 @@ const PLATFORM_CASE = `
   END
 `;
 
-// GET /api/marketing/kunlik?month=iyun&year=2026
+// GET /api/marketing/kunlik?month=iyun&year=2026&responsible_id=16,32
 router.get('/kunlik', async (req, res) => {
   const monthKey = (req.query.month || '').toLowerCase();
   const year     = parseInt(req.query.year) || new Date().getFullYear();
@@ -50,6 +50,11 @@ router.get('/kunlik', async (req, res) => {
   const daysInMonth = new Date(year, monthNum, 0).getDate();
   const monthStart = `${year}-${String(monthNum).padStart(2,'0')}-01`;
   const monthEnd   = `${year}-${String(monthNum).padStart(2,'0')}-${String(daysInMonth).padStart(2,'0')}`;
+
+  // responsible_id filter: comma-separated list of IDs
+  const responsibleIds = (req.query.responsible_id || '')
+    .split(',').map(s => parseInt(s)).filter(n => !isNaN(n));
+  const hasResponsible = responsibleIds.length > 0;
 
   const METRICS = ['leads','qual_leads','meetings','deals','deals_sum','sales_count','sales_sum','cancelled'];
 
@@ -61,6 +66,9 @@ router.get('/kunlik', async (req, res) => {
 
   try {
     // ── 1. Leads count: from Bitrix leads where source_id = UC_89FPH6 ──
+    const leadsParams = [monthStart, monthEnd, TARGET_SRC];
+    const leadsRespFilter = hasResponsible ? `AND responsible_id = ANY($4::int[])` : '';
+    if (hasResponsible) leadsParams.push(responsibleIds);
     const leadsRes = await pool.query(`
       SELECT
         EXTRACT(DAY FROM date_create AT TIME ZONE 'Asia/Tashkent')::int AS day,
@@ -69,8 +77,9 @@ router.get('/kunlik', async (req, res) => {
       WHERE (date_create AT TIME ZONE 'Asia/Tashkent')::date >= $1
         AND (date_create AT TIME ZONE 'Asia/Tashkent')::date <= $2
         AND source_id = $3
+        ${leadsRespFilter}
       GROUP BY day
-    `, [monthStart, monthEnd, TARGET_SRC]);
+    `, leadsParams);
 
     for (const row of leadsRes.rows) {
       if (row.day >= 1 && row.day <= daysInMonth) {
@@ -79,6 +88,9 @@ router.get('/kunlik', async (req, res) => {
     }
 
     // ── 2. Qual leads + cancelled (lead-level) from Bitrix leads ──
+    const qualParams = [monthStart, monthEnd, TARGET_SRC];
+    const qualRespFilter = hasResponsible ? `AND l.responsible_id = ANY($4::int[])` : '';
+    if (hasResponsible) qualParams.push(responsibleIds);
     const qualLeadsRes = await pool.query(`
       SELECT
         EXTRACT(DAY FROM l.date_create AT TIME ZONE 'Asia/Tashkent')::int AS day,
@@ -90,7 +102,8 @@ router.get('/kunlik', async (req, res) => {
       WHERE (l.date_create AT TIME ZONE 'Asia/Tashkent')::date >= $1
         AND (l.date_create AT TIME ZONE 'Asia/Tashkent')::date <= $2
         AND l.source_id = $3
-    `, [monthStart, monthEnd, TARGET_SRC]);
+        ${qualRespFilter}
+    `, qualParams);
 
     for (const row of qualLeadsRes.rows) {
       if (!row.day || row.day < 1 || row.day > daysInMonth) continue;
@@ -104,6 +117,9 @@ router.get('/kunlik', async (req, res) => {
     }
 
     // ── 3. Deal-based metrics: meetings, sales, cancelled (by date_create) ──
+    const dealParams = [monthStart, monthEnd, TARGET_SRC];
+    const dealRespFilter = hasResponsible ? `AND d.responsible_id = ANY($4::int[])` : '';
+    if (hasResponsible) dealParams.push(responsibleIds);
     const dealMetricsRes = await pool.query(`
       SELECT
         EXTRACT(DAY FROM d.date_create AT TIME ZONE 'Asia/Tashkent')::int AS day,
@@ -116,7 +132,8 @@ router.get('/kunlik', async (req, res) => {
       WHERE (d.date_create AT TIME ZONE 'Asia/Tashkent')::date >= $1
         AND (d.date_create AT TIME ZONE 'Asia/Tashkent')::date <= $2
         AND d.source_id = $3
-    `, [monthStart, monthEnd, TARGET_SRC]);
+        ${dealRespFilter}
+    `, dealParams);
 
     for (const row of dealMetricsRes.rows) {
       if (!row.day || row.day < 1 || row.day > daysInMonth) continue;
@@ -137,6 +154,9 @@ router.get('/kunlik', async (req, res) => {
     }
 
     // ── 4. Kelishuvlar: UC_W35V62 stagega kirgan YOKI sotuv bo'ldi deallar ──
+    const kelParams = [monthStart, monthEnd, TARGET_SRC];
+    const kelRespFilter = hasResponsible ? `AND d.responsible_id = ANY($4::int[])` : '';
+    if (hasResponsible) kelParams.push(responsibleIds);
     const kelishuvRes = await pool.query(`
       SELECT DISTINCT ON (d.id)
         EXTRACT(DAY FROM d.date_create AT TIME ZONE 'Asia/Tashkent')::int AS day,
@@ -146,6 +166,7 @@ router.get('/kunlik', async (req, res) => {
       WHERE d.source_id = $3
         AND (d.date_create AT TIME ZONE 'Asia/Tashkent')::date >= $1
         AND (d.date_create AT TIME ZONE 'Asia/Tashkent')::date <= $2
+        ${kelRespFilter}
         AND (
           s.is_won = true
           OR EXISTS (
@@ -156,7 +177,7 @@ router.get('/kunlik', async (req, res) => {
               AND (dsh.changed_at AT TIME ZONE 'Asia/Tashkent')::date <= $2
           )
         )
-    `, [monthStart, monthEnd, TARGET_SRC]);
+    `, kelParams);
 
     for (const row of kelishuvRes.rows) {
       if (!row.day || row.day < 1 || row.day > daysInMonth) continue;

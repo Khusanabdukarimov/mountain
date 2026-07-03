@@ -96,9 +96,10 @@ export function getBitrixDaily(month: MonthKey, year: number) {
   return apiGet<BitrixDailyResponse>('/api/marketing/bitrix-daily', { month, year });
 }
 
-export function getKunlikHisobot(month: MonthKey, year: number, targetologs: string[] = []) {
+export function getKunlikHisobot(month: MonthKey, year: number, targetologs: string[] = [], responsibleIds: number[] = []) {
   const targetolog = targetologs.length > 0 ? targetologs.join(',') : 'all';
-  return apiGet<KunlikResponse>('/api/marketing/kunlik', { month, year, targetolog });
+  const responsible_id = responsibleIds.length > 0 ? responsibleIds.join(',') : undefined;
+  return apiGet<KunlikResponse>('/api/marketing/kunlik', { month, year, targetolog, responsible_id });
 }
 
 export type KunlikMeta = {
@@ -156,8 +157,9 @@ export function deleteKunlikSection(id: number) {
   return authedFetch(`/api/marketing/kunlik-sections/${id}`, { method: 'DELETE' });
 }
 
-export function getKunlikSegment(section_id: number, month: MonthKey, year: number) {
-  return apiGet<KunlikSegmentResponse>('/api/marketing/kunlik-segment', { section_id, month, year });
+export function getKunlikSegment(section_id: number, month: MonthKey, year: number, responsibleIds: number[] = []) {
+  const responsible_id = responsibleIds.length > 0 ? responsibleIds.join(',') : undefined;
+  return apiGet<KunlikSegmentResponse>('/api/marketing/kunlik-segment', { section_id, month, year, responsible_id });
 }
 
 export type KunlikJamiStats = {
