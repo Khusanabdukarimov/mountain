@@ -775,7 +775,7 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
 
         lead_sql = _text(f"""
             SELECT
-                EXTRACT(DAY FROM l.date_create)::int AS day,
+                EXTRACT(DAY FROM l.date_create AT TIME ZONE 'Asia/Tashkent')::int AS day,
                 s.bitrix_id AS stage_bid,
                 s.is_final,
                 s.is_won,
@@ -793,7 +793,7 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
                 continue
             idx = int(day) - 1
             result["target"]["leads"][idx] += int(cnt)
-            if stage_bid in {"IN_PROCESS", "PROCESSED", "UC_1KPATX", "UC_Q2U9EL", "UC_KXC3ZW", "UC_L28G68", "CONVERTED"}:
+            if stage_bid in {"UC_KXC3ZW", "THINKING", "UC_L28G68", "CONSULTATION", "CONVERTED_CONSULT", "CONVERTED"}:
                 result["target"]["qual_leads"][idx] += int(cnt)
             if stage_bid in {"UC_NAZK5J", "JUNK"}:
                 result["target"]["cancelled"][idx] += int(cnt)
@@ -809,6 +809,7 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
                 EXTRACT(DAY FROM d.date_create AT TIME ZONE 'Asia/Tashkent')::int AS day,
                 s.bitrix_id AS stage_bid,
                 s.is_won,
+                s.is_final,
                 CASE WHEN d.currency_id = 'USD' THEN COALESCE(d.opportunity, 0) ELSE 0 END AS opp
             FROM deals d
             LEFT JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal'
@@ -818,10 +819,12 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
               {deal_campaign_filter}
               {resp_deal}
         """)
-        for day, stage_bid, is_won, opp in conn.execute(deal_sql, deal_params):
+        for day, stage_bid, is_won, is_final, opp in conn.execute(deal_sql, deal_params):
             if day is None or day < 1 or day > days_in_month:
                 continue
             idx = int(day) - 1
+            if not is_final and not is_won:
+                result["target"]["qual_leads"][idx] += 1
             if stage_bid == "NEW":
                 result["target"]["meetings"][idx] += 1
             if stage_bid == "UC_W35V62" or is_won:
