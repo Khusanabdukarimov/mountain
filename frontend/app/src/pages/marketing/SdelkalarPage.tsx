@@ -655,37 +655,6 @@ export default function SdelkalarPage() {
           )}
         </div>
 
-        {/* ── Lead Voronka (Sifatli → Kelishuv → Sotuv) ── */}
-        {(() => {
-          const sifatli  = (kpi as { sifatli_lid?: number })?.sifatli_lid ?? 0;
-          const konsB    = (kpi as { konsultatsiya_belgilandi?: number })?.konsultatsiya_belgilandi ?? 0;
-          const konsO    = (kpi as { konsultatsiya_otkazildi?: number })?.konsultatsiya_otkazildi ?? 0;
-          const kelishuv = (kpi as { kelishuv_count?: number })?.kelishuv_count ?? kpi?.total ?? 0;
-          const sotuv    = kpi?.sotuv_boldi ?? 0;
-          const stages = [
-            { label:"Sifatli Lid",     count:sifatli,  color:"#00BCD4", pct: 0,                                                  pctLabel:"" },
-            { label:"K. Belgilandi",   count:konsB,    color:"#9C27B0", pct: sifatli > 0  ? (konsB    / sifatli) * 100  : 0,    pctLabel:"Sifatlidan" },
-            { label:"K. O'tkazildi",   count:konsO,    color:"#4CAF50", pct: konsB > 0    ? (konsO    / konsB)   * 100  : 0,    pctLabel:"Belgilandidan" },
-            { label:"Kelishuv bo'ldi", count:kelishuv, color:"#FF9800", pct: konsO > 0    ? (kelishuv / konsO)   * 100  : 0,    pctLabel:"O'tkazildidan" },
-            { label:"Sotuv bo'ldi",    count:sotuv,    color:"#4CAF50", pct: kelishuv > 0 ? (sotuv    / kelishuv) * 100 : 0,    pctLabel:"Kelishuvdan" },
-          ];
-          return (
-            <div style={{ background:"var(--bg2)", border:"1px solid var(--border)", borderRadius:16, padding:"16px 24px", marginBottom:12, display:"flex", alignItems:"center", gap:0 }}>
-              <div style={{ fontSize:12, fontWeight:700, color:"var(--text3)", marginRight:16, whiteSpace:"nowrap" }}>Voronka</div>
-              {stages.map((s, i) => (
-                <div key={s.label} style={{ display:"flex", alignItems:"center", flex: i < 4 ? "1 1 0" : "none" }}>
-                  <div style={{ display:"flex", flexDirection:"column", alignItems:"center", gap:2, flex:1, padding:"0 8px" }}>
-                    <div style={{ fontSize:10, fontWeight:600, color:"var(--text3)", textAlign:"center", whiteSpace:"nowrap" }}>{s.label}</div>
-                    <div style={{ fontSize:26, fontWeight:800, color:s.color, lineHeight:1 }}>{fmtNum(s.count)}</div>
-                    {i > 0 && <div style={{ fontSize:10, color:s.color, fontWeight:700 }}>{s.pct.toFixed(0)}% {s.pctLabel}</div>}
-                  </div>
-                  {i < 4 && <div style={{ width:0, height:0, borderTop:"5px solid transparent", borderBottom:"5px solid transparent", borderLeft:`7px solid ${s.color}`, flexShrink:0 }} />}
-                </div>
-              ))}
-            </div>
-          );
-        })()}
-
         {/* ── KPI Cards ── */}
         <div style={{ display: "grid", gridTemplateColumns: "repeat(5,1fr)", gap: 12, marginBottom: 12 }}>
           <KpiCard label="Jami Sdelkalar" value={fmtNum(kpi?.total ?? 0)}
