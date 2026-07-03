@@ -775,7 +775,7 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
 
         lead_sql = _text(f"""
             SELECT
-                EXTRACT(DAY FROM l.date_create AT TIME ZONE 'Asia/Tashkent')::int AS day,
+                EXTRACT(DAY FROM l.date_create)::int AS day,
                 s.bitrix_id AS stage_bid,
                 s.is_final,
                 s.is_won,
