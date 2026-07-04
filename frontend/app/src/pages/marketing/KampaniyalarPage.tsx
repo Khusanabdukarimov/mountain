@@ -491,7 +491,7 @@ export default function KampaniyalarPage() {
 
     // Also include page forms not linked to any campaign (standalone forms like "Filtr - RM")
     for (const pf of pageMap.values()) {
-      if (!seen.has(pf.form_id) && pf.status === "ACTIVE" && (pf.leads_count ?? 0) > 0) {
+      if (!seen.has(pf.form_id) && pf.status === "ACTIVE") {
         seen.set(pf.form_id, pf);
       }
     }
