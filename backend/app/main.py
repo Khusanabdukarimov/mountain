@@ -527,11 +527,11 @@ def api_meta_page_forms(
     except Exception as e:
         print(f"[page-forms] Meta enrich error: {e}")
 
-    # Normalize form names: add "U-Mark" prefix for Mountain page forms missing it
+    # Add "U-Mark" prefix only for these two specific forms
+    _UMARK_FORM_IDS = {"4348225758776030", "1709540397044785"}
     for fid, f in all_forms.items():
-        name = f["form_name"]
-        if name and name != fid and not name.startswith("U-Mark") and "Mountain" in name:
-            f["form_name"] = "U-Mark " + name
+        if fid in _UMARK_FORM_IDS and not f["form_name"].startswith("U-Mark"):
+            f["form_name"] = "U-Mark " + f["form_name"]
 
     return {"forms": sorted(all_forms.values(), key=lambda x: -(x["leads_count"] or 0))}
 
