@@ -33,6 +33,20 @@ function allAccountIds() {
   return accounts;
 }
 
+// Returns campaign ID whitelist for a given account (from META_AD_ACCOUNT_ID_2_CAMPAIGN_IDS etc.)
+function campaignWhitelist(acct) {
+  const slots = [
+    { id: process.env.META_AD_ACCOUNT_ID_2 || '', ids: process.env.META_AD_ACCOUNT_ID_2_CAMPAIGN_IDS || '' },
+    { id: process.env.META_AD_ACCOUNT_ID_3 || '', ids: process.env.META_AD_ACCOUNT_ID_3_CAMPAIGN_IDS || '' },
+  ];
+  const normAcct = acct.startsWith('act_') ? acct : `act_${acct}`;
+  for (const slot of slots) {
+    const normSlot = slot.id.startsWith('act_') ? slot.id : `act_${slot.id}`;
+    if (normSlot === normAcct && slot.ids) return slot.ids.split(',').map(s => s.trim()).filter(Boolean);
+  }
+  return null; // no whitelist = all campaigns allowed
+}
+
 const MONTH_NUMS = {
   yanvar: 1, fevral: 2, mart: 3, aprel: 4,
   may: 5, iyun: 6, iyul: 7, avgust: 8,
@@ -1384,6 +1398,9 @@ async function syncMetaAdDaily(sinceStr, untilStr) {
   try {
     for (const acct of allAccountIds()) {
       try {
+        const whitelist = campaignWhitelist(acct);
+        const filtering = [{ field: 'campaign.objective', operator: 'IN', value: ['OUTCOME_LEADS', 'LEAD_GENERATION'] }];
+        if (whitelist) filtering.push({ field: 'campaign.id', operator: 'IN', value: whitelist });
         const rows = await paginate(`${BASE}/${acct}/insights`, {
           access_token:   token(),
           fields:         'campaign_id,campaign_name,adset_id,adset_name,objective,spend,impressions,clicks,inline_link_clicks,actions',
@@ -1391,7 +1408,7 @@ async function syncMetaAdDaily(sinceStr, untilStr) {
           level:          'adset',
           breakdowns:     'publisher_platform',
           time_range:     JSON.stringify({ since: sinceStr, until: untilStr }),
-          filtering:      JSON.stringify([{ field: 'campaign.objective', operator: 'IN', value: ['OUTCOME_LEADS', 'LEAD_GENERATION'] }]),
+          filtering:      JSON.stringify(filtering),
           limit:          500,
         });
 
