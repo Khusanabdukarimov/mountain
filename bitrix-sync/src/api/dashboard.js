@@ -2788,14 +2788,26 @@ router.put('/payments', async (req, res) => {
 });
 
 // DELETE /api/dashboard/payments      { "id": 148 }
+// DELETE /api/dashboard/payments
+// Body: to'liq payment JSON (deal_id, paid_at, amount_usd, turi) — id shart emas
 router.delete('/payments', async (req, res) => {
-  const id = parseInt(req.body?.id, 10);
-  if (!id) return res.status(400).json({ error: 'id majburiy' });
+  const { deal_id, paid_at, amount_usd, turi } = req.body ?? {};
+  if (!deal_id || !paid_at || amount_usd == null) {
+    return res.status(400).json({ error: 'deal_id, paid_at, amount_usd majburiy' });
+  }
   try {
-    const { rows } = await pool.query(`${PAYMENT_SELECT} WHERE dp.id = $1`, [id]);
+    const { rows } = await pool.query(
+      `${PAYMENT_SELECT}
+       WHERE dp.deal_id = $1
+         AND dp.paid_at = $2::date
+         AND dp.amount_usd = $3
+         ${turi ? 'AND dp.turi = $4' : ''}
+       LIMIT 1`,
+      turi ? [deal_id, paid_at, parseFloat(amount_usd), turi] : [deal_id, paid_at, parseFloat(amount_usd)]
+    );
     if (!rows.length) return res.status(404).json({ error: "To'lov topilmadi" });
     const deleted = rows[0];
-    await pool.query(`DELETE FROM deal_payments WHERE id = $1`, [id]);
+    await pool.query(`DELETE FROM deal_payments WHERE id = $1`, [deleted.id]);
     res.json({ deleted });
   } catch (err) {
     console.error('[payments DELETE]', err.message);
