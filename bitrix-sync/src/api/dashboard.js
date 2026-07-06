@@ -2747,6 +2747,34 @@ router.get('/payments', async (req, res) => {
 router.post('/payments', async (req, res) => {
   const body = req.body ?? {};
 
+  // Bitrix24 outgoing webhook: ONCRMDYNAMICITEMADDED — tolov_id ni payment ga yozish
+  if (body.event === 'ONCRMDYNAMICITEMADDED') {
+    console.log('[payments webhook] ADDED raw body:', JSON.stringify(body));
+    const tolovId = parseInt(body?.data?.FIELDS?.ID || body?.['data[FIELDS][ID]'], 10);
+    const dealId  = parseInt(body?.data?.FIELDS?.PARENT_ID_2 || body?.['data[FIELDS][PARENT_ID_2]'], 10);
+    console.log(`[payments webhook] ADDED tolov_id=${tolovId} deal_id=${dealId}`);
+    if (tolovId && dealId) {
+      try {
+        // Eng oxirgi tolov_id=null payment ni yangilash
+        const { rowCount } = await pool.query(
+          `UPDATE deal_payments SET tolov_id = $1
+           WHERE id = (
+             SELECT id FROM deal_payments
+             WHERE deal_id = $2 AND tolov_id IS NULL
+             ORDER BY id DESC LIMIT 1
+           )`,
+          [tolovId, dealId]
+        );
+        console.log(`[payments webhook] ADDED: updated ${rowCount} row(s) tolov_id=${tolovId} deal_id=${dealId}`);
+        return res.json({ status: 'tolov_id_saved', tolov_id: tolovId, deal_id: dealId, updated: rowCount });
+      } catch (err) {
+        console.error('[payments webhook ADDED]', err.message);
+        return res.status(500).json({ error: err.message });
+      }
+    }
+    return res.json({ status: 'skipped', tolov_id: tolovId, deal_id: dealId });
+  }
+
   // Bitrix24 outgoing webhook: ONCRMDYNAMICITEMDELETE
   if (body.event === 'ONCRMDYNAMICITEMDELETE') {
     console.log('[payments webhook] raw body:', JSON.stringify(body));
