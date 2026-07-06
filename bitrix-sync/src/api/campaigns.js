@@ -674,6 +674,7 @@ router.get('/forms', async (req, res) => {
               COUNT(*)::int AS total_leads
        FROM facebook_leads
        WHERE campaign_id IS NOT NULL AND form_id IS NOT NULL
+         AND form_id NOT IN ('1581692690210297')
        GROUP BY campaign_id, campaign_name, form_id, adset_id, adset_name`,
       [since, until],
     );

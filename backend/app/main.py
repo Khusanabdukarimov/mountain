@@ -533,7 +533,11 @@ def api_meta_page_forms(
         if fid in _UMARK_FORM_IDS and not f["form_name"].startswith("U-Mark"):
             f["form_name"] = "U-Mark " + f["form_name"]
 
-    return {"forms": sorted(all_forms.values(), key=lambda x: -(x["leads_count"] or 0))}
+    # Exclude these forms from dashboard
+    _EXCLUDED_FORM_IDS = {"1581692690210297"}  # Mountain | Nishonchi
+    forms = [f for f in all_forms.values() if f["form_id"] not in _EXCLUDED_FORM_IDS]
+
+    return {"forms": sorted(forms, key=lambda x: -(x["leads_count"] or 0))}
 
 
 @app.get("/api/meta/accounts")
