@@ -704,18 +704,12 @@ router.get('/forms', async (req, res) => {
     }
 
     // ── 2b. Sifatli lid count per form ──
-    // Sifatli = O'ylab ko'radi / Konsultatsiya belgilandi / O'tkazilmadi / Bekor bo'ldi / Konsultatsiyadan o'tkazildi
-    const SIFATLI_STAGES = [
-      'UC_KXC3ZW','THINKING','3','UC_QLQ3P5',   // O'ylab ko'radi
-      'UC_L28G68','CONSULTATION',                 // Konsultatsiya belgilandi
-      'UC_5G8244','NOT_TRANSFERRED',              // O'tkazilmadi
-      'UC_NAZK5J','RECYCLED',                     // Bekor bo'ldi
-      'CONVERTED','CONVERTED_CONSULT',            // Konsultatsiyadan o'tkazildi
-    ];
+    // Sifatli = matched to Bitrix24 AND NOT in junk/sifatsiz/bekor stages
+    // Same definition as /form-stats endpoint so Kampaniyalar and Faol formalar tabs match
     const { rows: sifatliRows } = await pool.query(`
       SELECT
         fl.form_id,
-        COUNT(DISTINCT CASE WHEN s.bitrix_id = ANY($3::text[])
+        COUNT(DISTINCT CASE WHEN l.id IS NOT NULL AND s.bitrix_id NOT IN ('JUNK','UC_F8K4GI','UC_NAZK5J')
           THEN fl.id END)::int AS sifatli_lid
       FROM facebook_leads fl
       LEFT JOIN lead_phones lp
@@ -727,7 +721,7 @@ router.get('/forms', async (req, res) => {
         AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date >= $1::date
         AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date <= $2::date
       GROUP BY fl.form_id
-    `, [since, until, SIFATLI_STAGES]);
+    `, [since, until]);
     const sifatliMap = {};
     for (const r of sifatliRows) sifatliMap[r.form_id] = r.sifatli_lid;
 
@@ -1055,13 +1049,8 @@ router.get('/creatives', async (req, res) => {
         COUNT(DISTINCT fl.id)::int        AS meta_leads,
         COUNT(DISTINCT CASE WHEN lp.lead_id IS NOT NULL                                       THEN fl.id END)::int AS in_bitrix,
         COUNT(DISTINCT CASE WHEN lp.lead_id IS NULL                                           THEN fl.id END)::int AS not_in_bitrix,
-        COUNT(DISTINCT CASE WHEN s.bitrix_id = ANY(ARRAY[
-          'UC_KXC3ZW','THINKING','3','UC_QLQ3P5',
-          'UC_L28G68','CONSULTATION',
-          'UC_5G8244','NOT_TRANSFERRED',
-          'UC_NAZK5J','RECYCLED',
-          'CONVERTED','CONVERTED_CONSULT'
-        ])                                                                                     THEN fl.id END)::int AS sifatli,
+        COUNT(DISTINCT CASE WHEN lp.lead_id IS NOT NULL AND s.bitrix_id NOT IN ('JUNK','UC_F8K4GI','UC_NAZK5J')
+                                                                                               THEN fl.id END)::int AS sifatli,
         COUNT(DISTINCT CASE WHEN s.bitrix_id = 'UC_F8K4GI'                                   THEN fl.id END)::int AS sifatsiz,
         COUNT(DISTINCT CASE WHEN s.bitrix_id = 'UC_NAZK5J'                                   THEN fl.id END)::int AS bekor_boldi,
         COUNT(DISTINCT CASE WHEN s.bitrix_id = 'CONVERTED'                                   THEN fl.id END)::int AS konsultatsiya_otdi,
