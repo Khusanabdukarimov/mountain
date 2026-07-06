@@ -2701,5 +2701,37 @@ router.get('/deals-source-stats', async (req, res) => {
   }
 });
 
+// GET /api/dashboard/payments/:id — to'lov ma'lumotlarini ko'rish (delete oldidan)
+router.get('/payments/:id', async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  if (!id) return res.status(400).json({ error: 'id majburiy' });
+  try {
+    const { rows } = await pool.query(`
+      SELECT
+        dp.id,
+        dp.deal_id,
+        dp.tolov_id,
+        dp.paid_at,
+        dp.amount_usd,
+        dp.turi,
+        dp.created_at,
+        TRIM(COALESCE(r.name,'') || ' ' || COALESCE(r.last_name,'')) AS responsible,
+        s.name AS stage_name,
+        d.opportunity,
+        d.currency_id
+      FROM deal_payments dp
+      JOIN deals d ON d.id = dp.deal_id
+      LEFT JOIN responsibles r ON r.id = d.responsible_id
+      LEFT JOIN stages s ON s.id = d.stage_id
+      WHERE dp.id = $1
+    `, [id]);
+    if (!rows.length) return res.status(404).json({ error: 'To\'lov topilmadi' });
+    res.json(rows[0]);
+  } catch (err) {
+    console.error('[dashboard/payments/:id]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
 module.exports.startCallsAutoSync = startCallsAutoSync;
