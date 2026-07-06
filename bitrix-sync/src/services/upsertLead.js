@@ -111,11 +111,7 @@ async function upsertLead(r, client) {
     utmSource = UTM_NORMALIZE[utmSource.trim().toLowerCase()];
   }
 
-  // Facebook/Instagram nativ integratsiyasi → Target ga normalize qilish
   let sourceId = r.SOURCE_ID || null;
-  if (sourceId === SOURCE_FB || sourceId === SOURCE_IG) {
-    sourceId = SOURCE_TARGET; // UC_89FPH6 = Target
-  }
 
   const isAdSource = [SOURCE_FB, SOURCE_IG, SOURCE_TARGET].includes(r.SOURCE_ID);
   if (!utmSource && isAdSource) {
