@@ -2749,14 +2749,36 @@ router.post('/payments', async (req, res) => {
 
   // Bitrix24 outgoing webhook: ONCRMDYNAMICITEMDELETE
   if (body.event === 'ONCRMDYNAMICITEMDELETE') {
-    const tolovId = parseInt(body?.data?.FIELDS?.ID, 10);
-    if (!tolovId) return res.status(400).json({ error: 'FIELDS.ID topilmadi' });
+    console.log('[payments webhook] raw body:', JSON.stringify(body));
+    // tolov_id field qiymati turli joylarda kelishi mumkin
+    const tolovId = parseInt(
+      body?.data?.FIELDS?.ID ||
+      body?.['data[FIELDS][ID]'] ||
+      body?.data?.ID, 10
+    );
+    console.log(`[payments webhook] ONCRMDYNAMICITEMDELETE tolov_id=${tolovId}`);
+    if (!tolovId) return res.status(400).json({ error: 'FIELDS.ID topilmadi', body });
     try {
-      const { rows } = await pool.query(`${PAYMENT_SELECT} WHERE dp.tolov_id = $1`, [tolovId]);
-      if (!rows.length) { return res.json({ status: 'not_found', tolov_id: tolovId }); }
+      // 1. tolov_id bo'yicha qidirish
+      let { rows } = await pool.query(`${PAYMENT_SELECT} WHERE dp.tolov_id = $1`, [tolovId]);
+      // 2. topilmasa — deal_id + amount bo'yicha fallback
+      if (!rows.length) {
+        const dealId = parseInt(body?.data?.FIELDS?.PARENT_ID_2 || body?.['data[FIELDS][PARENT_ID_2]'], 10);
+        if (dealId) {
+          const fb = await pool.query(
+            `${PAYMENT_SELECT} WHERE dp.deal_id = $1 AND dp.tolov_id IS NULL ORDER BY dp.id DESC LIMIT 1`,
+            [dealId]
+          );
+          rows = fb.rows;
+        }
+      }
+      if (!rows.length) {
+        console.log(`[payments webhook] not found tolov_id=${tolovId}`);
+        return res.json({ status: 'not_found', tolov_id: tolovId });
+      }
       const deleted = rows[0];
-      await pool.query(`DELETE FROM deal_payments WHERE tolov_id = $1`, [tolovId]);
-      console.log(`[payments webhook] deleted tolov_id=${tolovId} deal_id=${deleted.deal_id}`);
+      await pool.query(`DELETE FROM deal_payments WHERE id = $1`, [deleted.id]);
+      console.log(`[payments webhook] deleted id=${deleted.id} tolov_id=${tolovId} deal_id=${deleted.deal_id}`);
       return res.json({ status: 'deleted', deleted });
     } catch (err) {
       console.error('[payments webhook DELETE]', err.message);
