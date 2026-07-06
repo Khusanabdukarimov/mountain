@@ -352,8 +352,8 @@ export default function KunlikPage() {
   const yearOptions = [DEFAULT_YEAR, DEFAULT_YEAR - 1, DEFAULT_YEAR - 2];
 
   const TARGETOLOG_OPTIONS = [
-    { value: "islomiddin", label: "Islomiddin" },
-    { value: "dilmurod",   label: "Dilmurod"   },
+    { value: "u-mark",   label: "U-Mark"   },
+    { value: "dilmurod", label: "Dilmurod" },
   ];
   const MASUL_OPTIONS = [
     { value: 16, label: "Davlatyor" },

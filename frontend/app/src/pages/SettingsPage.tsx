@@ -14,7 +14,7 @@ import { X, Plus, AlertCircle } from 'lucide-react';
 
 const TARGETOLOG_LABELS: Record<string, { label: string; color: string }> = {
   dilmurod:   { label: 'Dilmurod',   color: '#2196F3' },
-  islomiddin: { label: 'Islomiddin', color: '#9C27B0' },
+  'u-mark':   { label: 'U-Mark',     color: '#9C27B0' },
 };
 
 export default function SettingsPage() {
@@ -54,7 +54,7 @@ export default function SettingsPage() {
 function CampaignAssignmentsSection() {
   const qc = useQueryClient();
   const toast = useToast();
-  const [filter, setFilter] = useState<'all' | 'unassigned' | 'dilmurod' | 'islomiddin'>('unassigned');
+  const [filter, setFilter] = useState<'all' | 'unassigned' | 'dilmurod' | 'u-mark'>('unassigned');
 
   const { data, isLoading } = useQuery({
     queryKey: ['campaign-assignments'],
@@ -99,7 +99,7 @@ function CampaignAssignmentsSection() {
         {([
           { key: 'unassigned', label: `Biriktirilmagan (${unassignedCount})` },
           { key: 'dilmurod',   label: 'Dilmurod' },
-          { key: 'islomiddin', label: 'Islomiddin' },
+          { key: 'u-mark', label: 'U-Mark' },
           { key: 'all',        label: 'Hammasi' },
         ] as { key: typeof filter; label: string }[]).map(t => (
           <button

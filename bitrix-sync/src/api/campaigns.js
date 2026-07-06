@@ -1748,7 +1748,7 @@ router.get('/campaign-assignments', async (_req, res) => {
 router.post('/campaign-assign', async (req, res) => {
   const { campaign_name, targetolog } = req.body || {};
   if (!campaign_name) return res.status(400).json({ error: 'campaign_name required' });
-  const valid = ['dilmurod', 'islomiddin'];
+  const valid = ['dilmurod', 'u-mark'];
   // null/undefined = explicitly unassigned (shown in "Biriktirilmagan")
   if (targetolog !== null && targetolog !== undefined && targetolog !== '' && !valid.includes(targetolog))
     return res.status(400).json({ error: 'invalid targetolog' });
