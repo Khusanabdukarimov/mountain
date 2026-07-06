@@ -342,17 +342,21 @@ router.get('/form-stats', async (req, res) => {
       )
       SELECT
         fl.campaign_name,
-        COUNT(DISTINCT fl.id)::int                                                                                        AS jami_lid,
-        COUNT(DISTINCT CASE WHEN le.id IS NOT NULL THEN fl.id END)::int                                                  AS bitrixda_bor,
-        COUNT(DISTINCT CASE WHEN le.id IS NULL THEN fl.id END)::int                                                      AS bitrixda_yoq,
-        COUNT(DISTINCT CASE WHEN le.id IS NOT NULL AND s.bitrix_id NOT IN ('JUNK','UC_F8K4GI','UC_NAZK5J') THEN fl.id END)::int AS sifatli,
-        COUNT(DISTINCT CASE WHEN s.bitrix_id = 'UC_F8K4GI' THEN fl.id END)::int                                         AS sifatsiz,
-        COUNT(DISTINCT CASE WHEN s.bitrix_id = 'UC_NAZK5J' THEN fl.id END)::int                                         AS bekor_boldi,
-        COALESCE(sc.sotuv_boldi, 0)::int                                                                                 AS sotuv_boldi
+        COUNT(DISTINCT fl.id)::int                                                                                                 AS jami_lid,
+        COUNT(DISTINCT CASE WHEN le.id IS NOT NULL OR dp.deal_id IS NOT NULL THEN fl.id END)::int                              AS bitrixda_bor,
+        COUNT(DISTINCT CASE WHEN le.id IS NULL AND dp.deal_id IS NULL THEN fl.id END)::int                                     AS bitrixda_yoq,
+        COUNT(DISTINCT CASE WHEN (le.id IS NOT NULL AND s.bitrix_id NOT IN ('JUNK','UC_F8K4GI','UC_NAZK5J'))
+                                 OR (dp.deal_id IS NOT NULL AND ds.bitrix_id NOT IN ('JUNK','UC_F8K4GI','UC_NAZK5J')) THEN fl.id END)::int AS sifatli,
+        COUNT(DISTINCT CASE WHEN s.bitrix_id = 'UC_F8K4GI' OR ds.bitrix_id = 'UC_F8K4GI' THEN fl.id END)::int                AS sifatsiz,
+        COUNT(DISTINCT CASE WHEN s.bitrix_id = 'UC_NAZK5J' OR ds.bitrix_id = 'UC_NAZK5J' THEN fl.id END)::int                AS bekor_boldi,
+        COALESCE(sc.sotuv_boldi, 0)::int                                                                                       AS sotuv_boldi
       FROM facebook_leads fl
       LEFT JOIN lead_phones lp ON RIGHT(REGEXP_REPLACE(lp.phone,'[^0-9]','','g'),9) = RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9)
       LEFT JOIN leads le ON le.id = lp.lead_id
       LEFT JOIN stages s  ON s.id  = le.stage_id
+      LEFT JOIN deal_phones dp ON RIGHT(REGEXP_REPLACE(dp.phone,'[^0-9]','','g'),9) = RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9)
+      LEFT JOIN deals d   ON d.id  = dp.deal_id AND d.lead_id IS NULL
+      LEFT JOIN stages ds ON ds.id = d.stage_id
       LEFT JOIN sotuv_by_campaign sc ON sc.campaign_name = fl.campaign_name
       WHERE fl.campaign_name IS NOT NULL
         ${from ? `AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date >= $1::date` : ''}
@@ -709,14 +713,17 @@ router.get('/forms', async (req, res) => {
     const { rows: sifatliRows } = await pool.query(`
       SELECT
         fl.form_id,
-        COUNT(DISTINCT CASE WHEN l.id IS NOT NULL AND s.bitrix_id NOT IN ('JUNK','UC_F8K4GI','UC_NAZK5J')
+        COUNT(DISTINCT CASE WHEN
+            (l.id IS NOT NULL AND s.bitrix_id NOT IN ('JUNK','UC_F8K4GI','UC_NAZK5J'))
+            OR (dp.deal_id IS NOT NULL AND ds.bitrix_id NOT IN ('JUNK','UC_F8K4GI','UC_NAZK5J'))
           THEN fl.id END)::int AS sifatli_lid
       FROM facebook_leads fl
-      LEFT JOIN lead_phones lp
-        ON RIGHT(REGEXP_REPLACE(lp.phone, '[^0-9]', '', 'g'), 9)
-         = RIGHT(REGEXP_REPLACE(fl.phone,  '[^0-9]', '', 'g'), 9)
-      LEFT JOIN leads  l ON l.id = lp.lead_id
-      LEFT JOIN stages s ON s.id = l.stage_id
+      LEFT JOIN lead_phones lp ON RIGHT(REGEXP_REPLACE(lp.phone,'[^0-9]','','g'),9) = RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9)
+      LEFT JOIN leads  l  ON l.id  = lp.lead_id
+      LEFT JOIN stages s  ON s.id  = l.stage_id
+      LEFT JOIN deal_phones dp ON RIGHT(REGEXP_REPLACE(dp.phone,'[^0-9]','','g'),9) = RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9)
+      LEFT JOIN deals  d  ON d.id  = dp.deal_id AND d.lead_id IS NULL
+      LEFT JOIN stages ds ON ds.id = d.stage_id
       WHERE fl.form_id IS NOT NULL
         AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date >= $1::date
         AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date <= $2::date
