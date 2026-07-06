@@ -2745,7 +2745,27 @@ router.get('/payments', async (req, res) => {
 
 // POST /api/dashboard/payments        { deal_id, paid_at, amount_usd, turi }
 router.post('/payments', async (req, res) => {
-  const { deal_id, paid_at, amount_usd, turi } = req.body ?? {};
+  const body = req.body ?? {};
+
+  // Bitrix24 outgoing webhook: ONCRMDYNAMICITEMDELETE
+  if (body.event === 'ONCRMDYNAMICITEMDELETE') {
+    const tolovId = parseInt(body?.data?.FIELDS?.ID, 10);
+    if (!tolovId) return res.status(400).json({ error: 'FIELDS.ID topilmadi' });
+    try {
+      const { rows } = await pool.query(`${PAYMENT_SELECT} WHERE dp.tolov_id = $1`, [tolovId]);
+      if (!rows.length) { return res.json({ status: 'not_found', tolov_id: tolovId }); }
+      const deleted = rows[0];
+      await pool.query(`DELETE FROM deal_payments WHERE tolov_id = $1`, [tolovId]);
+      console.log(`[payments webhook] deleted tolov_id=${tolovId} deal_id=${deleted.deal_id}`);
+      return res.json({ status: 'deleted', deleted });
+    } catch (err) {
+      console.error('[payments webhook DELETE]', err.message);
+      return res.status(500).json({ error: err.message });
+    }
+  }
+
+  // Manual create: { deal_id, paid_at, amount_usd, turi }
+  const { deal_id, paid_at, amount_usd, turi } = body;
   if (!deal_id || !paid_at || amount_usd == null) {
     return res.status(400).json({ error: 'deal_id, paid_at, amount_usd majburiy' });
   }
