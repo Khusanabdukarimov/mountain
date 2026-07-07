@@ -123,6 +123,10 @@ async function createBitrixLead(leadgenId, raw, fields) {
     try {
       const rawLead = await fetchOne('crm.lead.get', newLeadId);
       if (rawLead) {
+        // Patch UTM_CAMPAIGN from FB lead data if Bitrix24 doesn't return it
+        if (!rawLead.UTM_CAMPAIGN && raw.campaign_name) {
+          rawLead.UTM_CAMPAIGN = raw.campaign_name;
+        }
         await upsertLead(rawLead);
         const assigned = await distributeLead(newLeadId);
         if (assigned) {

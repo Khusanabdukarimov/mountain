@@ -526,9 +526,12 @@ router.get('/plans/:id/progress', async (req, res) => {
     `, [respIds, plan.period_start, plan.period_end]);
 
     // Build CRM actuals map: { responsible_id: { subperiod_index: amount } }
+    // Also build flat CRM total (not filtered by subperiod) to match distribution endpoint
     const actualsByResp = {};
+    const crmTotalByResp = {};
     for (const row of actualsRes.rows) {
       if (!actualsByResp[row.responsible_id]) actualsByResp[row.responsible_id] = {};
+      crmTotalByResp[row.responsible_id] = (crmTotalByResp[row.responsible_id] || 0) + parseFloat(row.amount);
       for (const sp of subperiods) {
         if (row.close_date >= sp.start && row.close_date <= sp.end) {
           actualsByResp[row.responsible_id][sp.index] =
@@ -559,23 +562,26 @@ router.get('/plans/:id/progress', async (req, res) => {
         const s = stored[sp.index];
         mergedActuals[sp.index] = s !== undefined ? s : (crmActuals[sp.index] || 0);
       }
-      const totalActual = Object.values(mergedActuals).reduce((s, v) => s + v, 0);
-      const target      = parseFloat(emp.target);
+      const totalActual    = Object.values(mergedActuals).reduce((s, v) => s + v, 0);
+      const crmTotalActual = crmTotalByResp[emp.responsible_id] || 0;
+      const target         = parseFloat(emp.target);
       return {
-        responsible_id: emp.responsible_id,
-        full_name:      emp.full_name,
-        work_position:  emp.work_position,
-        photo_url:      emp.photo_url,
-        active:         emp.active,
+        responsible_id:   emp.responsible_id,
+        full_name:        emp.full_name,
+        work_position:    emp.work_position,
+        photo_url:        emp.photo_url,
+        active:           emp.active,
         target,
-        total_actual:   Math.round(totalActual * 100) / 100,
-        pct:            target > 0 ? Math.min(Math.round(totalActual / target * 100), 999) : 0,
-        subperiods:     computeSubperiodProgress(target, subperiods, mergedActuals, today),
+        total_actual:     Math.round(totalActual * 100) / 100,
+        crm_total_actual: Math.round(crmTotalActual * 100) / 100,
+        pct:              target > 0 ? Math.min(Math.round(totalActual / target * 100), 999) : 0,
+        subperiods:       computeSubperiodProgress(target, subperiods, mergedActuals, today),
       };
     });
 
-    const totalTarget = employees.reduce((s, e) => s + e.target,       0);
-    const totalActual = employees.reduce((s, e) => s + e.total_actual,  0);
+    const totalTarget   = employees.reduce((s, e) => s + e.target,           0);
+    const totalActual   = employees.reduce((s, e) => s + e.total_actual,      0);
+    const crmTotalActual = employees.reduce((s, e) => s + e.crm_total_actual, 0);
 
     // Previous period comparison
     const prevPlanRes = await pool.query(`
@@ -619,8 +625,9 @@ router.get('/plans/:id/progress', async (req, res) => {
       subperiods: subperiods.map(({ index, label, start, end }) => ({ index, label, start, end })),
       employees,
       summary: {
-        total_target: Math.round(totalTarget * 100) / 100,
-        total_actual: Math.round(totalActual * 100) / 100,
+        total_target:     Math.round(totalTarget * 100) / 100,
+        total_actual:     Math.round(totalActual * 100) / 100,
+        crm_total_actual: Math.round(crmTotalActual * 100) / 100,
         pct: totalTarget > 0 ? Math.min(Math.round(totalActual / totalTarget * 100), 999) : 0,
         prev_actual:  prevActual,
         growth_pct:   growthPct,

@@ -321,7 +321,7 @@ export default function KunlikPage() {
         case "deals":       return js.total_deals;
         case "deals_sum":   return js.deals_sum;
         case "sales_count": return js.total_sales;
-        case "sales_sum":   return js.total_paid;
+        case "sales_sum":   return js.sales_sum ?? js.total_paid;
         case "tolangan":    return js.total_paid;
       }
     }

@@ -377,15 +377,20 @@ export default function KampaniyalarPage() {
   )].sort(), [allRows, targetologCampSet, filterCampaigns, filterPlatforms]);
 
   const optForms = useMemo(() => {
+    const pageNameMap = new Map<string, string>(
+      (pageFormsQ.data?.forms ?? []).map(f => [f.form_id, f.form_name])
+    );
     const names: string[] = [];
     for (const camp of formsQ.data?.campaigns ?? []) {
       if (filterCampaigns.length > 0 && !filterCampaigns.includes(camp.campaign_name)) continue;
       for (const f of camp.forms) {
-        if (f.status === "ACTIVE" && !names.includes(f.form_name)) names.push(f.form_name);
+        if (f.status !== "ACTIVE") continue;
+        const name = pageNameMap.get(f.form_id) ?? f.form_name;
+        if (!names.includes(name)) names.push(name);
       }
     }
     return names.sort();
-  }, [formsQ.data, filterCampaigns]);
+  }, [formsQ.data, pageFormsQ.data, filterCampaigns]);
 
   const optCreatives = useMemo(() => {
     const creatives = creativesQ.data?.creatives ?? [];
@@ -485,7 +490,8 @@ export default function KampaniyalarPage() {
           leads_count:  pf?.leads_count ?? f.leads_count ?? 0,
           created_time: pf?.created_time ?? f.created_time ?? "",
           page_name:    pf?.page_name ?? "",
-        });
+          sifatli_lid:  (f as any).sifatli_lid ?? 0,
+        } as any);
       }
     }
 
@@ -534,18 +540,22 @@ export default function KampaniyalarPage() {
     return formAdsets;
   }, [formsQ.data, filterCampaigns, filterForm, filterAdsets]);
 
-  // Per-form lead count from DB (date-range filtered, correctly split per form_id)
+  // Per-form lead + sifatli counts from DB (correctly split per form_id, not adset-level)
   const formLeadsMap = useMemo(() => {
-    const m = new Map<string, number>();
+    const m = new Map<string, { leads: number; sifatli: number }>();
     for (const camp of formsQ.data?.campaigns ?? []) {
       for (const f of camp.forms) {
-        m.set(f.form_id, (m.get(f.form_id) ?? 0) + ((f as any).leads_count ?? 0));
+        const prev = m.get(f.form_id) ?? { leads: 0, sifatli: 0 };
+        m.set(f.form_id, {
+          leads:   prev.leads + ((f as any).leads_count ?? 0),
+          sifatli: (f as any).sifatli_lid ?? prev.sifatli,
+        });
       }
     }
     return m;
   }, [formsQ.data]);
 
-  const formDbStatsMap = useMemo(() => {
+const formDbStatsMap = useMemo(() => {
     const creatives = creativesQ.data?.creatives ?? [];
     // spend/clicks come from `allRows` (Meta Insights, real adset-level data) —
     // NOT split evenly across a campaign's "active form count" (the old method
@@ -929,10 +939,10 @@ export default function KampaniyalarPage() {
                                 <td className="px-4 py-3 text-text2">{Math.round(fClicks)}</td>
                                 <td className="px-4 py-3 text-text2">${cpc.toFixed(2)}</td>
                                 <td className="px-4 py-3 font-semibold text-blue">
-                                  {fmtNum(formLeadsMap.get(form.form_id) ?? formDbStatsMap.get(form.form_id)?.leads ?? 0)}
+                                  {fmtNum(formLeadsMap.get(form.form_id)?.leads ?? formDbStatsMap.get(form.form_id)?.leads ?? 0)}
                                 </td>
-                                <td className="px-4 py-3 font-semibold" style={{ color: (formDbStatsMap.get(form.form_id)?.sifatli ?? 0) > 0 ? "#22c55e" : "var(--text3)" }}>
-                                  {formDbStatsMap.get(form.form_id)?.sifatli ?? 0}
+                                <td className="px-4 py-3 font-semibold" style={{ color: (formLeadsMap.get(form.form_id)?.sifatli ?? formDbStatsMap.get(form.form_id)?.sifatli ?? 0) > 0 ? "#22c55e" : "var(--text3)" }}>
+                                  {formLeadsMap.get(form.form_id)?.sifatli ?? formDbStatsMap.get(form.form_id)?.sifatli ?? 0}
                                 </td>
                               </tr>
                               {isExp && (
@@ -1050,7 +1060,7 @@ export default function KampaniyalarPage() {
                       >
                         <span className="w-2 h-2 rounded-full bg-blue shrink-0" />
                         <span className="text-[13px] font-semibold text-text flex-1">{form.form_name}</span>
-                        <span className="text-[11.5px] text-blue font-bold">{fmtNum(formLeadsMap.get(form.form_id) ?? formDbStatsMap.get(form.form_id)?.leads ?? 0)} lid</span>
+                        <span className="text-[11.5px] text-blue font-bold">{fmtNum(formLeadsMap.get(form.form_id)?.leads ?? formDbStatsMap.get(form.form_id)?.leads ?? 0)} lid</span>
                         <ChevronDown className={`w-4 h-4 text-text3 transition-transform ${expandedCamp === form.form_id ? "rotate-180" : ""}`} />
                       </button>
                       {expandedCamp === form.form_id && (

@@ -692,7 +692,11 @@ function ProgressView({ planId }: { planId: number }) {
       </div>
 
       {/* ── Summary row: Donut · Top-5 · Dynamics chart ─────────── */}
-      <SummaryRow employees={employees} subperiods={subperiods} summary={data.summary} />
+      <SummaryRow employees={employees} subperiods={subperiods} summary={(() => {
+        const actual = (data.summary as any).crm_total_actual ?? data.summary.total_actual;
+        const target = data.summary.total_target;
+        return { ...data.summary, total_actual: actual, pct: target > 0 ? Math.min(Math.round(actual / target * 100), 999) : 0 };
+      })()} />
     </div>
   );
 }

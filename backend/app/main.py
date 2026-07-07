@@ -759,7 +759,7 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
                 _override_rows = _oc.execute(
                     _text("SELECT campaign_name, targetolog FROM campaign_targetolog_overrides WHERE targetolog IS NOT NULL")
                 ).fetchall()
-            _assigned_campaigns = [r[0] for r in _override_rows if r[1] in targ_keys]
+            _assigned_campaigns = [r[0] for r in _override_rows if r[1] and r[1].lower() in targ_keys]
         except Exception:
             pass
 
@@ -868,8 +868,7 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
             # Targetolog filtered: only FB-attributed deals for selected campaigns
             sale_sql = _text(f"""
                 SELECT
-                    EXTRACT(DAY FROM d.uf_bp_sale_date AT TIME ZONE 'Asia/Tashkent')::int AS day,
-                    CASE WHEN d.currency_id = 'USD' THEN COALESCE(d.opportunity, 0) ELSE 0 END AS opp
+                    EXTRACT(DAY FROM d.uf_bp_sale_date AT TIME ZONE 'Asia/Tashkent')::int AS day
                 FROM deals d
                 JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
                 WHERE d.uf_bp_sale_date::date BETWEEN :since AND :until
@@ -895,25 +894,108 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
                     )
                   )
             """)
+            payment_sql = _text(f"""
+                SELECT day, SUM(paid) AS opp FROM (
+                    SELECT EXTRACT(DAY FROM p.paid_at AT TIME ZONE 'Asia/Tashkent')::int AS day,
+                           p.amount_usd AS paid
+                    FROM deals d
+                    JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
+                    JOIN deal_payments p ON p.deal_id = d.id
+                    WHERE p.paid_at::date BETWEEN :since AND :until
+                      {resp_deal}
+                      AND (
+                        EXISTS (
+                          SELECT 1 FROM leads le
+                          JOIN lead_phones lp ON lp.lead_id = le.id
+                          JOIN facebook_leads fl_a ON
+                            RIGHT(REGEXP_REPLACE(fl_a.phone,'[^0-9]','','g'),9)
+                            = RIGHT(REGEXP_REPLACE(lp.phone,'[^0-9]','','g'),9)
+                            AND fl_a.campaign_name = le.utm_campaign
+                          WHERE le.id = d.lead_id
+                            {_camp_filter_a}
+                        )
+                        OR EXISTS (
+                          SELECT 1 FROM deal_phones dp
+                          JOIN facebook_leads fl_b ON
+                            RIGHT(REGEXP_REPLACE(fl_b.phone,'[^0-9]','','g'),9)
+                            = RIGHT(REGEXP_REPLACE(dp.phone,'[^0-9]','','g'),9)
+                          WHERE dp.deal_id = d.id
+                            {_camp_filter_b}
+                        )
+                      )
+                    UNION ALL
+                    SELECT EXTRACT(DAY FROM COALESCE(d.uf_bp_sale_date, d.uf_payment_date, d.date_create) AT TIME ZONE 'Asia/Tashkent')::int AS day,
+                           d.uf_paid_sum AS paid
+                    FROM deals d
+                    JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
+                    WHERE COALESCE(d.uf_bp_sale_date, d.uf_payment_date, d.date_create)::date BETWEEN :since AND :until
+                      {resp_deal}
+                      AND d.uf_paid_sum IS NOT NULL AND d.uf_paid_sum > 0
+                      AND d.id NOT IN (SELECT DISTINCT deal_id FROM deal_payments)
+                      AND (
+                        EXISTS (
+                          SELECT 1 FROM leads le
+                          JOIN lead_phones lp ON lp.lead_id = le.id
+                          JOIN facebook_leads fl_a ON
+                            RIGHT(REGEXP_REPLACE(fl_a.phone,'[^0-9]','','g'),9)
+                            = RIGHT(REGEXP_REPLACE(lp.phone,'[^0-9]','','g'),9)
+                            AND fl_a.campaign_name = le.utm_campaign
+                          WHERE le.id = d.lead_id
+                            {_camp_filter_a}
+                        )
+                        OR EXISTS (
+                          SELECT 1 FROM deal_phones dp
+                          JOIN facebook_leads fl_b ON
+                            RIGHT(REGEXP_REPLACE(fl_b.phone,'[^0-9]','','g'),9)
+                            = RIGHT(REGEXP_REPLACE(dp.phone,'[^0-9]','','g'),9)
+                          WHERE dp.deal_id = d.id
+                            {_camp_filter_b}
+                        )
+                      )
+                ) sub GROUP BY day
+            """)
         else:
             # No targetolog filter: all won Target deals (matched + unmatched)
             sale_sql = _text(f"""
                 SELECT
-                    EXTRACT(DAY FROM d.uf_bp_sale_date AT TIME ZONE 'Asia/Tashkent')::int AS day,
-                    CASE WHEN d.currency_id = 'USD' THEN COALESCE(d.opportunity, 0) ELSE 0 END AS opp
+                    EXTRACT(DAY FROM d.uf_bp_sale_date AT TIME ZONE 'Asia/Tashkent')::int AS day
                 FROM deals d
                 JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
                 WHERE d.uf_bp_sale_date::date BETWEEN :since AND :until
                   AND d.source_id = :src
                   {resp_deal}
             """)
+            payment_sql = _text(f"""
+                SELECT day, SUM(paid) AS opp FROM (
+                    SELECT EXTRACT(DAY FROM p.paid_at AT TIME ZONE 'Asia/Tashkent')::int AS day,
+                           p.amount_usd AS paid
+                    FROM deals d
+                    JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
+                    JOIN deal_payments p ON p.deal_id = d.id
+                    WHERE p.paid_at::date BETWEEN :since AND :until
+                      AND d.source_id = :src
+                      {resp_deal}
+                    UNION ALL
+                    SELECT EXTRACT(DAY FROM COALESCE(d.uf_bp_sale_date, d.uf_payment_date, d.date_create) AT TIME ZONE 'Asia/Tashkent')::int AS day,
+                           d.uf_paid_sum AS paid
+                    FROM deals d
+                    JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
+                    WHERE COALESCE(d.uf_bp_sale_date, d.uf_payment_date, d.date_create)::date BETWEEN :since AND :until
+                      AND d.source_id = :src
+                      {resp_deal}
+                      AND d.uf_paid_sum IS NOT NULL AND d.uf_paid_sum > 0
+                      AND d.id NOT IN (SELECT DISTINCT deal_id FROM deal_payments)
+                ) sub GROUP BY day
+            """)
             sale_params["src"] = TARGET_SRC
-        for day, opp in conn.execute(sale_sql, sale_params):
+        for (day,) in conn.execute(sale_sql, sale_params):
             if day is None or day < 1 or day > days_in_month:
                 continue
-            idx = int(day) - 1
-            result["target"]["sales_count"][idx] += 1
-            result["target"]["sales_sum"][idx] += float(opp)
+            result["target"]["sales_count"][int(day) - 1] += 1
+        for day, opp in conn.execute(payment_sql, sale_params):
+            if day is None or day < 1 or day > days_in_month:
+                continue
+            result["target"]["sales_sum"][int(day) - 1] += float(opp)
 
         # ── UNMATCHED sales (won Target deals NOT linked to any FB campaign) ──
         unmatched_params = {"since": since, "until": until, "src": TARGET_SRC}
@@ -921,8 +1003,7 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
             unmatched_params["resp_ids"] = resp_ids
         unmatched_sql = _text(f"""
             SELECT
-                EXTRACT(DAY FROM d.uf_bp_sale_date AT TIME ZONE 'Asia/Tashkent')::int AS day,
-                CASE WHEN d.currency_id = 'USD' THEN COALESCE(d.opportunity, 0) ELSE 0 END AS opp
+                EXTRACT(DAY FROM d.uf_bp_sale_date AT TIME ZONE 'Asia/Tashkent')::int AS day
             FROM deals d
             JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
             WHERE d.uf_bp_sale_date::date BETWEEN :since AND :until
@@ -945,12 +1026,68 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
                 WHERE dp.deal_id = d.id
               )
         """)
-        for day, opp in conn.execute(unmatched_sql, unmatched_params):
+        unmatched_payment_sql = _text(f"""
+            SELECT day, SUM(paid) AS opp FROM (
+                SELECT EXTRACT(DAY FROM p.paid_at AT TIME ZONE 'Asia/Tashkent')::int AS day,
+                       p.amount_usd AS paid
+                FROM deals d
+                JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
+                JOIN deal_payments p ON p.deal_id = d.id
+                WHERE p.paid_at::date BETWEEN :since AND :until
+                  AND d.source_id = :src
+                  {resp_deal}
+                  AND NOT EXISTS (
+                    SELECT 1 FROM leads le
+                    JOIN lead_phones lp ON lp.lead_id = le.id
+                    JOIN facebook_leads fl ON
+                      RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9)
+                      = RIGHT(REGEXP_REPLACE(lp.phone,'[^0-9]','','g'),9)
+                      AND fl.campaign_name = le.utm_campaign
+                    WHERE le.id = d.lead_id
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1 FROM deal_phones dp
+                    JOIN facebook_leads fl ON
+                      RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9)
+                      = RIGHT(REGEXP_REPLACE(dp.phone,'[^0-9]','','g'),9)
+                    WHERE dp.deal_id = d.id
+                  )
+                UNION ALL
+                SELECT EXTRACT(DAY FROM COALESCE(d.uf_bp_sale_date, d.uf_payment_date, d.date_create) AT TIME ZONE 'Asia/Tashkent')::int AS day,
+                       d.uf_paid_sum AS paid
+                FROM deals d
+                JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
+                WHERE COALESCE(d.uf_bp_sale_date, d.uf_payment_date, d.date_create)::date BETWEEN :since AND :until
+                  AND d.source_id = :src
+                  {resp_deal}
+                  AND d.uf_paid_sum IS NOT NULL AND d.uf_paid_sum > 0
+                  AND d.id NOT IN (SELECT DISTINCT deal_id FROM deal_payments)
+                  AND NOT EXISTS (
+                    SELECT 1 FROM leads le
+                    JOIN lead_phones lp ON lp.lead_id = le.id
+                    JOIN facebook_leads fl ON
+                      RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9)
+                      = RIGHT(REGEXP_REPLACE(lp.phone,'[^0-9]','','g'),9)
+                      AND fl.campaign_name = le.utm_campaign
+                    WHERE le.id = d.lead_id
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1 FROM deal_phones dp
+                    JOIN facebook_leads fl ON
+                      RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9)
+                      = RIGHT(REGEXP_REPLACE(dp.phone,'[^0-9]','','g'),9)
+                    WHERE dp.deal_id = d.id
+                  )
+            ) sub GROUP BY day
+        """)
+        for (day,) in conn.execute(unmatched_sql, unmatched_params):
             if day is None or day < 1 or day > days_in_month:
                 continue
-            idx = int(day) - 1
-            result["unmatched"]["sales_count"][idx] += 1
-            result["unmatched"]["sales_sum"][idx] += float(opp)
+            result["unmatched"]["sales_count"][int(day) - 1] += 1
+        for day, opp in conn.execute(unmatched_payment_sql, unmatched_params):
+            if day is None or day < 1 or day > days_in_month:
+                continue
+            result["unmatched"]["sales_sum"][int(day) - 1] += float(opp)
 
     # Convert float arrays to int where appropriate
     int_keys = {"leads", "qual_leads", "meetings", "deals", "sales_count", "cancelled"}
@@ -1237,26 +1374,48 @@ def api_marketing_kunlik_segment(section_id: int, month: str, year: int, respons
                     result["deals"][idx] += 1
                     result["deals_sum"][idx] += float(opp)
 
-        # ── Sales metrics: won deals by uf_bp_sale_date (same logic as Target) ──
+        # ── Sales metrics: won deals by uf_bp_sale_date (count) + deal_payments (sum) ──
         if deal_col and source_names:
             sales_sql = _text(f"""
-                SELECT
-                    EXTRACT(DAY FROM d.uf_bp_sale_date AT TIME ZONE 'Asia/Tashkent')::int AS day,
-                    CASE WHEN d.currency_id = 'USD' THEN COALESCE(d.opportunity, 0) ELSE 0 END AS opp
+                SELECT EXTRACT(DAY FROM d.uf_bp_sale_date AT TIME ZONE 'Asia/Tashkent')::int AS day
                 FROM deals d
                 JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
                 WHERE d.uf_bp_sale_date::date BETWEEN :since AND :until
                   AND d.{deal_col} = ANY(:names)
                   {resp_filter_deal}
             """)
+            sales_payment_sql = _text(f"""
+                SELECT day, SUM(paid) AS opp FROM (
+                    SELECT EXTRACT(DAY FROM p.paid_at AT TIME ZONE 'Asia/Tashkent')::int AS day,
+                           p.amount_usd AS paid
+                    FROM deals d
+                    JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
+                    JOIN deal_payments p ON p.deal_id = d.id
+                    WHERE p.paid_at::date BETWEEN :since AND :until
+                      AND d.{deal_col} = ANY(:names)
+                      {resp_filter_deal}
+                    UNION ALL
+                    SELECT EXTRACT(DAY FROM COALESCE(d.uf_bp_sale_date, d.uf_payment_date, d.date_create) AT TIME ZONE 'Asia/Tashkent')::int AS day,
+                           d.uf_paid_sum AS paid
+                    FROM deals d
+                    JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
+                    WHERE COALESCE(d.uf_bp_sale_date, d.uf_payment_date, d.date_create)::date BETWEEN :since AND :until
+                      AND d.{deal_col} = ANY(:names)
+                      {resp_filter_deal}
+                      AND d.uf_paid_sum IS NOT NULL AND d.uf_paid_sum > 0
+                      AND d.id NOT IN (SELECT DISTINCT deal_id FROM deal_payments)
+                ) sub GROUP BY day
+            """)
             params = {"since": since, "until": until, "names": source_names}
             if resp_ids: params["resp_ids"] = resp_ids
-            for day, opp in conn.execute(sales_sql, params):
+            for (day,) in conn.execute(sales_sql, params):
                 if day is None or day < 1 or day > days_in_month:
                     continue
-                idx = int(day) - 1
-                result["sales_count"][idx] += 1
-                result["sales_sum"][idx] += float(opp)
+                result["sales_count"][int(day) - 1] += 1
+            for day, opp in conn.execute(sales_payment_sql, params):
+                if day is None or day < 1 or day > days_in_month:
+                    continue
+                result["sales_sum"][int(day) - 1] += float(opp)
 
     int_keys = {"leads", "qual_leads", "meetings", "deals", "sales_count", "cancelled"}
     for k in int_keys:
@@ -1313,12 +1472,28 @@ def api_marketing_kunlik_jami_stats(month: str, year: int, responsible_id: str =
 
         sales_row = conn.execute(text(f"""
             SELECT
-                COUNT(*)                                                                    AS total_sales,
-                COALESCE(SUM(CASE WHEN d.currency_id = 'USD' THEN d.opportunity ELSE 0 END), 0) AS sales_sum
-            FROM deals d
-            JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
-            WHERE d.uf_bp_sale_date::date BETWEEN :since AND :until
-            {resp_deal}
+                (SELECT COUNT(*) FROM deals d
+                 JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
+                 WHERE d.uf_bp_sale_date::date BETWEEN :since AND :until
+                 {resp_deal})                                                               AS total_sales,
+                COALESCE((
+                    SELECT SUM(sub.amount) FROM (
+                        SELECT p.amount_usd AS amount
+                        FROM deals d
+                        JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
+                        JOIN deal_payments p ON p.deal_id = d.id
+                        WHERE p.paid_at BETWEEN :since AND :until
+                        {resp_deal}
+                        UNION ALL
+                        SELECT d.uf_paid_sum AS amount
+                        FROM deals d
+                        JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
+                        WHERE COALESCE(d.uf_bp_sale_date, d.uf_payment_date, d.date_create)::date BETWEEN :since AND :until
+                          AND d.uf_paid_sum IS NOT NULL AND d.uf_paid_sum > 0
+                          AND d.id NOT IN (SELECT DISTINCT deal_id FROM deal_payments)
+                        {resp_deal}
+                    ) sub
+                ), 0)                                                                       AS sales_sum
         """), p).fetchone()
 
         paid_row = conn.execute(text(f"""

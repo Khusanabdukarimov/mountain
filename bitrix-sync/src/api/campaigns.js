@@ -345,8 +345,8 @@ router.get('/form-stats', async (req, res) => {
         COUNT(DISTINCT fl.id)::int                                                                                                 AS jami_lid,
         COUNT(DISTINCT CASE WHEN le.id IS NOT NULL OR dp.deal_id IS NOT NULL THEN fl.id END)::int                              AS bitrixda_bor,
         COUNT(DISTINCT CASE WHEN le.id IS NULL AND dp.deal_id IS NULL THEN fl.id END)::int                                     AS bitrixda_yoq,
-        COUNT(DISTINCT CASE WHEN (le.id IS NOT NULL AND s.bitrix_id NOT IN ('JUNK','UC_F8K4GI','UC_NAZK5J'))
-                                 OR (dp.deal_id IS NOT NULL AND ds.bitrix_id NOT IN ('JUNK','UC_F8K4GI','UC_NAZK5J')) THEN fl.id END)::int AS sifatli,
+        COUNT(DISTINCT CASE WHEN (le.id IS NOT NULL AND s.bitrix_id IN ('THINKING','UC_KXC3ZW','CONSULTATION','UC_L28G68','NOT_TRANSFERRED','UC_5G8244','CONVERTED_CONSULT','CONVERTED','UC_NAZK5J','RECYCLED'))
+                                 OR (dp.deal_id IS NOT NULL AND ds.bitrix_id IN ('THINKING','UC_KXC3ZW','CONSULTATION','UC_L28G68','NOT_TRANSFERRED','UC_5G8244','CONVERTED_CONSULT','CONVERTED','UC_NAZK5J','RECYCLED')) THEN fl.id END)::int AS sifatli,
         COUNT(DISTINCT CASE WHEN s.bitrix_id = 'UC_F8K4GI' OR ds.bitrix_id = 'UC_F8K4GI' THEN fl.id END)::int                AS sifatsiz,
         COUNT(DISTINCT CASE WHEN s.bitrix_id = 'UC_NAZK5J' OR ds.bitrix_id = 'UC_NAZK5J' THEN fl.id END)::int                AS bekor_boldi,
         COALESCE(sc.sotuv_boldi, 0)::int                                                                                       AS sotuv_boldi
@@ -714,8 +714,8 @@ router.get('/forms', async (req, res) => {
       SELECT
         fl.form_id,
         COUNT(DISTINCT CASE WHEN
-            (l.id IS NOT NULL AND s.bitrix_id NOT IN ('JUNK','UC_F8K4GI','UC_NAZK5J'))
-            OR (dp.deal_id IS NOT NULL AND ds.bitrix_id NOT IN ('JUNK','UC_F8K4GI','UC_NAZK5J'))
+            (l.id IS NOT NULL AND s.bitrix_id IN ('THINKING','UC_KXC3ZW','CONSULTATION','UC_L28G68','NOT_TRANSFERRED','UC_5G8244','CONVERTED_CONSULT','CONVERTED','UC_NAZK5J','RECYCLED'))
+            OR (dp.deal_id IS NOT NULL AND ds.bitrix_id IN ('THINKING','UC_KXC3ZW','CONSULTATION','UC_L28G68','NOT_TRANSFERRED','UC_5G8244','CONVERTED_CONSULT','CONVERTED','UC_NAZK5J','RECYCLED'))
           THEN fl.id END)::int AS sifatli_lid
       FROM facebook_leads fl
       LEFT JOIN lead_phones lp ON RIGHT(REGEXP_REPLACE(lp.phone,'[^0-9]','','g'),9) = RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9)
@@ -786,6 +786,7 @@ router.get('/forms', async (req, res) => {
     // Only cache for standard month ranges (not custom from/to)
     const hasMeta = Object.keys(formDetails).length > 0;
     if (hasMeta && !fromDate && !toDate) await setCache('campaigns/forms', monthNum, yr, payload);
+    res.set('Cache-Control', 'no-store');
     return res.json(payload);
   } catch (err) {
     console.error('[campaigns/forms]', err.response?.data || err.message);
@@ -798,6 +799,8 @@ router.get('/forms', async (req, res) => {
 let syncRunning = false;
 
 async function upsertLead(lead, formId, pageId) {
+  const { rows: excl } = await pool.query('SELECT 1 FROM facebook_leads_excluded WHERE id = $1', [String(lead.id)]);
+  if (excl.length > 0) return;
   const fields = extractFields(lead.field_data || []);
   await pool.query(
     `INSERT INTO facebook_leads (
@@ -1056,7 +1059,7 @@ router.get('/creatives', async (req, res) => {
         COUNT(DISTINCT fl.id)::int        AS meta_leads,
         COUNT(DISTINCT CASE WHEN lp.lead_id IS NOT NULL                                       THEN fl.id END)::int AS in_bitrix,
         COUNT(DISTINCT CASE WHEN lp.lead_id IS NULL                                           THEN fl.id END)::int AS not_in_bitrix,
-        COUNT(DISTINCT CASE WHEN lp.lead_id IS NOT NULL AND s.bitrix_id NOT IN ('JUNK','UC_F8K4GI','UC_NAZK5J')
+        COUNT(DISTINCT CASE WHEN lp.lead_id IS NOT NULL AND s.bitrix_id IN ('THINKING','UC_KXC3ZW','CONSULTATION','UC_L28G68','NOT_TRANSFERRED','UC_5G8244','CONVERTED_CONSULT','CONVERTED','UC_NAZK5J','RECYCLED')
                                                                                                THEN fl.id END)::int AS sifatli,
         COUNT(DISTINCT CASE WHEN s.bitrix_id = 'UC_F8K4GI'                                   THEN fl.id END)::int AS sifatsiz,
         COUNT(DISTINCT CASE WHEN s.bitrix_id = 'UC_NAZK5J'                                   THEN fl.id END)::int AS bekor_boldi,

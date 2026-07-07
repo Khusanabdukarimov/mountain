@@ -21,6 +21,8 @@ const marketingRouter  = require('./api/marketing');
 const app = express();
 const PORT = process.env.PORT || 3001;
 
+app.disable('etag'); // Prevent 304 responses with stale cached API data
+
 // Bitrix24 webhooks come as application/x-www-form-urlencoded
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
