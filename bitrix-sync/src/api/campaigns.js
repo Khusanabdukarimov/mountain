@@ -1737,6 +1737,21 @@ router.get('/campaign-assignments', async (_req, res) => {
       targetolog:    overrideMap[c.campaign_name] ?? null,
       is_override:   c.campaign_name in overrideMap,
     }));
+
+    // Also include override campaigns not yet in meta_ad_daily
+    const inResult = new Set(result.map(r => r.campaign_name));
+    for (const o of overrides) {
+      if (!inResult.has(o.campaign_name) && o.targetolog) {
+        result.push({
+          campaign_name: o.campaign_name,
+          total_leads:   0,
+          total_spend:   0,
+          last_date:     null,
+          targetolog:    o.targetolog,
+          is_override:   true,
+        });
+      }
+    }
     res.json(result);
   } catch (err) {
     console.error('[campaign-assignments]', err.message);
