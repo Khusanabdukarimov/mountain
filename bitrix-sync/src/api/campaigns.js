@@ -749,6 +749,35 @@ router.get('/forms', async (req, res) => {
       console.warn(`[campaigns/forms] Meta API unavailable (code ${code}), using DB data only`);
     }
 
+    // ── 2c. Add campaigns from facebook_campaign_forms that have 0 leads in DB ──
+    try {
+      const { rows: fcfRows } = await pool.query(`
+        SELECT fcf.form_id, fcf.campaign_id, fcf.campaign_name
+        FROM facebook_campaign_forms fcf
+        WHERE fcf.campaign_id IS NOT NULL
+      `);
+      for (const r of fcfRows) {
+        if (!campaignMap[r.campaign_id]) {
+          campaignMap[r.campaign_id] = {
+            campaign_id:   r.campaign_id,
+            campaign_name: r.campaign_name,
+            objective:     'OUTCOME_LEADS',
+            forms: {},
+          };
+        }
+        if (!campaignMap[r.campaign_id].forms[r.form_id]) {
+          campaignMap[r.campaign_id].forms[r.form_id] = {
+            form_id:     r.form_id,
+            adset_ids:   [],
+            adset_names: [],
+            month_leads: 0,
+          };
+        }
+      }
+    } catch (e) {
+      console.warn('[campaigns/forms] facebook_campaign_forms lookup failed:', e.message);
+    }
+
     // ── 3. Build result ────────────────────────────────────────
     const result = [];
     for (const camp of Object.values(campaignMap)) {

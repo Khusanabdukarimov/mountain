@@ -616,6 +616,16 @@ _QUALIFIED_LEAD_STATUSES = {
     "IN_PROCESS", "PROCESSED", "UC_1KPATX", "UC_Q2U9EL", "UC_KXC3ZW", "UC_L28G68", "CONVERTED",
 }
 
+# "Sifatli lid" — the single definition shared with the Kampaniyalar page.
+# Must stay identical to the stage list in bitrix-sync/src/api/campaigns.js
+# (/form-stats, /forms, /creatives), otherwise the two pages disagree.
+_SIFATLI_STAGES = [
+    "THINKING", "UC_KXC3ZW", "CONSULTATION", "UC_L28G68", "NOT_TRANSFERRED",
+    "UC_5G8244", "CONVERTED_CONSULT", "CONVERTED", "UC_NAZK5J", "RECYCLED",
+]
+# "Bekor bo'ldi" — a subset of sifatli (the lead qualified, then cancelled).
+_BEKOR_STAGES = ["UC_NAZK5J", "JUNK"]
+
 
 def _classify_source(utm_source, source_id=None):
     bucket = _UTM_TO_SOURCE.get((utm_source or "").strip().lower())
@@ -746,7 +756,7 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
     TARGET_SRC = "UC_89FPH6"
 
     resp_ids = [int(x) for x in responsible_id.split(",") if x.strip().isdigit()] if responsible_id else []
-    resp_lead = "AND l.responsible_id = ANY(:resp_ids)" if resp_ids else ""
+    resp_fb   = "AND (le.responsible_id = ANY(:resp_ids) OR d.responsible_id = ANY(:resp_ids))" if resp_ids else ""
     resp_deal = "AND d.responsible_id = ANY(:resp_ids)" if resp_ids else ""
 
     targ_keys = [t.strip().lower() for t in targetolog.split(",") if t.strip() and t.strip() != "all"]
@@ -763,7 +773,7 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
         except Exception:
             pass
 
-    def _build_campaign_filter(alias: str, params: dict) -> str:
+    def _build_campaign_filter(alias: str, params: dict, column: str = "utm_campaign") -> str:
         """Build utm_campaign WHERE clause using DB assignments only."""
         if not targ_keys:
             return ""
@@ -774,39 +784,61 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
             key = f"ca{len(params)}"
             params[key] = n
             keys.append(f":{key}")
-        return f"AND {alias}.utm_campaign IN ({', '.join(keys)})"
+        return f"AND {alias}.{column} IN ({', '.join(keys)})"
 
     with _bxe.connect() as conn:
         # ── LEAD metrics ──────────────────────────────────────────────
-        lead_params: dict = {"since": since, "until": until, "src": TARGET_SRC}
+        # Counted from facebook_leads (Meta form submissions), phone-matched to
+        # Bitrix — the same basis as the Kampaniyalar page, so the two agree.
+        # Counting the Bitrix `leads` table instead would silently drop every
+        # returning contact: upsertLead dedupes by phone, so a repeat submitter
+        # reuses their old lead row and produces no lead dated on the day they
+        # actually filled the form.
+        lead_params: dict = {
+            "since": since, "until": until,
+            "sifatli": _SIFATLI_STAGES, "bekor": _BEKOR_STAGES,
+        }
         if resp_ids:
             lead_params["resp_ids"] = resp_ids
-        lead_campaign_filter = _build_campaign_filter("l", lead_params)
+        lead_campaign_filter = _build_campaign_filter("fl", lead_params, "campaign_name")
 
         lead_sql = _text(f"""
             SELECT
-                EXTRACT(DAY FROM l.date_create AT TIME ZONE 'Asia/Tashkent')::int AS day,
-                s.bitrix_id AS stage_bid,
-                s.is_final,
-                s.is_won,
-                COUNT(*) AS cnt
-            FROM leads l
-            LEFT JOIN stages s ON s.id = l.stage_id AND s.entity = 'lead'
-            WHERE l.date_create::date BETWEEN :since AND :until
-              AND l.source_id = :src
+                EXTRACT(DAY FROM fl.created_time AT TIME ZONE 'Asia/Tashkent')::int AS day,
+                COUNT(DISTINCT fl.id) AS leads,
+                COUNT(DISTINCT CASE WHEN (le.id     IS NOT NULL AND s.bitrix_id  = ANY(:sifatli))
+                                      OR (dp.deal_id IS NOT NULL AND ds.bitrix_id = ANY(:sifatli))
+                                    THEN fl.id END) AS qual_leads,
+                COUNT(DISTINCT CASE WHEN s.bitrix_id = ANY(:bekor) OR ds.bitrix_id = ANY(:bekor)
+                                    THEN fl.id END) AS cancelled
+            FROM facebook_leads fl
+            LEFT JOIN lead_phones lp
+              ON RIGHT(REGEXP_REPLACE(lp.phone, '[^0-9]', '', 'g'), 9)
+               = RIGHT(REGEXP_REPLACE(fl.phone, '[^0-9]', '', 'g'), 9)
+             AND RIGHT(REGEXP_REPLACE(fl.phone, '[^0-9]', '', 'g'), 9) <> ''
+            LEFT JOIN leads  le ON le.id = lp.lead_id
+            LEFT JOIN stages s  ON s.id  = le.stage_id AND s.entity = 'lead'
+            LEFT JOIN deal_phones dp
+              ON RIGHT(REGEXP_REPLACE(dp.phone, '[^0-9]', '', 'g'), 9)
+               = RIGHT(REGEXP_REPLACE(fl.phone, '[^0-9]', '', 'g'), 9)
+             AND RIGHT(REGEXP_REPLACE(fl.phone, '[^0-9]', '', 'g'), 9) <> ''
+            LEFT JOIN deals  d  ON d.id  = dp.deal_id AND d.lead_id IS NULL
+            LEFT JOIN stages ds ON ds.id = d.stage_id AND ds.entity = 'deal'
+            WHERE (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date BETWEEN :since AND :until
               {lead_campaign_filter}
-              {resp_lead}
-            GROUP BY 1, 2, 3, 4
+              {resp_fb}
+            GROUP BY 1
         """)
-        for day, stage_bid, is_final, is_won, cnt in conn.execute(lead_sql, lead_params):
+        # Note: no "AND fl.campaign_name IS NOT NULL" — /creatives counts
+        # campaign-less FB leads too (as 'N/A'), so adding that filter would
+        # break the "all targetologs" case.
+        for day, leads, qual_leads, cancelled in conn.execute(lead_sql, lead_params):
             if day is None or day < 1 or day > days_in_month:
                 continue
             idx = int(day) - 1
-            result["target"]["leads"][idx] += int(cnt)
-            if stage_bid in {"UC_KXC3ZW", "THINKING", "UC_L28G68", "CONSULTATION", "CONVERTED_CONSULT", "CONVERTED"}:
-                result["target"]["qual_leads"][idx] += int(cnt)
-            if stage_bid in {"UC_NAZK5J", "JUNK"}:
-                result["target"]["cancelled"][idx] += int(cnt)
+            result["target"]["leads"][idx]      += int(leads)
+            result["target"]["qual_leads"][idx] += int(qual_leads)
+            result["target"]["cancelled"][idx]  += int(cancelled)
 
         # ── DEAL metrics (meetings, shartnoma) by date_create ───────────
         deal_params: dict = {"since": since, "until": until, "src": TARGET_SRC}
@@ -833,8 +865,9 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
             if day is None or day < 1 or day > days_in_month:
                 continue
             idx = int(day) - 1
-            if not is_final and not is_won:
-                result["target"]["qual_leads"][idx] += 1
+            # NB: open deals must NOT be added to qual_leads — "Maqsadli lidlar
+            # soni" counts leads, and every open deal here already comes from a
+            # lead that the query above counted.
             if stage_bid == "NEW":
                 result["target"]["meetings"][idx] += 1
             if stage_bid == "UC_W35V62" or is_won:

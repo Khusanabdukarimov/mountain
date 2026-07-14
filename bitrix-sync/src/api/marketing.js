@@ -56,6 +56,40 @@ router.get('/kunlik', async (req, res) => {
     .split(',').map(s => parseInt(s)).filter(n => !isNaN(n));
   const hasResponsible = responsibleIds.length > 0;
 
+  // targetolog filter: comma-separated list ('dilmurod','u-mark'), independent of responsible_id.
+  // Resolved to the set of campaign names assigned to those targetologs via campaign_targetolog_overrides.
+  const targetologs = (req.query.targetolog || '')
+    .split(',').map(s => s.trim().toLowerCase()).filter(s => s && s !== 'all');
+  const hasTargetolog = targetologs.length > 0;
+  let targetologCampaigns = [];
+  if (hasTargetolog) {
+    const { rows } = await pool.query(
+      `SELECT campaign_name FROM campaign_targetolog_overrides WHERE targetolog = ANY($1::text[])`,
+      [targetologs]
+    );
+    targetologCampaigns = rows.map(r => r.campaign_name);
+  }
+
+  // Appends "AND <alias>responsible_id = ANY(...)" when responsible filter is active.
+  function respFilter(params, alias = '') {
+    if (!hasResponsible) return '';
+    params.push(responsibleIds);
+    return `AND ${alias}responsible_id = ANY($${params.length}::int[])`;
+  }
+  // Appends "AND <alias>utm_campaign = ANY(...)" for lead-level queries.
+  function leadTargFilter(params, alias = '') {
+    if (!hasTargetolog) return '';
+    params.push(targetologCampaigns);
+    return `AND ${alias}utm_campaign = ANY($${params.length}::text[])`;
+  }
+  // Appends a subquery matching deals to leads whose utm_campaign belongs to the targetolog.
+  // Deals created directly without a lead_id are not attributable to a campaign and are excluded.
+  function dealTargFilter(params, alias = '') {
+    if (!hasTargetolog) return '';
+    params.push(targetologCampaigns);
+    return `AND ${alias}lead_id IN (SELECT id FROM leads WHERE utm_campaign = ANY($${params.length}::text[]))`;
+  }
+
   const METRICS = ['leads','qual_leads','meetings','deals','deals_sum','sales_count','sales_sum','cancelled'];
 
   const result = { target: {} };
@@ -67,8 +101,8 @@ router.get('/kunlik', async (req, res) => {
   try {
     // ── 1. Leads count: from Bitrix leads where source_id = UC_89FPH6 ──
     const leadsParams = [monthStart, monthEnd, TARGET_SRC];
-    const leadsRespFilter = hasResponsible ? `AND responsible_id = ANY($4::int[])` : '';
-    if (hasResponsible) leadsParams.push(responsibleIds);
+    const leadsRespFilter = respFilter(leadsParams);
+    const leadsTargFilter = leadTargFilter(leadsParams);
     const leadsRes = await pool.query(`
       SELECT
         EXTRACT(DAY FROM date_create AT TIME ZONE 'Asia/Tashkent')::int AS day,
@@ -78,6 +112,7 @@ router.get('/kunlik', async (req, res) => {
         AND (date_create AT TIME ZONE 'Asia/Tashkent')::date <= $2
         AND source_id = $3
         ${leadsRespFilter}
+        ${leadsTargFilter}
       GROUP BY day
     `, leadsParams);
 
@@ -89,8 +124,8 @@ router.get('/kunlik', async (req, res) => {
 
     // ── 2. Qual leads + cancelled (lead-level) from Bitrix leads ──
     const qualParams = [monthStart, monthEnd, TARGET_SRC];
-    const qualRespFilter = hasResponsible ? `AND l.responsible_id = ANY($4::int[])` : '';
-    if (hasResponsible) qualParams.push(responsibleIds);
+    const qualRespFilter = respFilter(qualParams, 'l.');
+    const qualTargFilter = leadTargFilter(qualParams, 'l.');
     const qualLeadsRes = await pool.query(`
       SELECT
         EXTRACT(DAY FROM l.date_create AT TIME ZONE 'Asia/Tashkent')::int AS day,
@@ -103,6 +138,7 @@ router.get('/kunlik', async (req, res) => {
         AND (l.date_create AT TIME ZONE 'Asia/Tashkent')::date <= $2
         AND l.source_id = $3
         ${qualRespFilter}
+        ${qualTargFilter}
     `, qualParams);
 
     for (const row of qualLeadsRes.rows) {
@@ -118,8 +154,8 @@ router.get('/kunlik', async (req, res) => {
 
     // ── 3. Deal-based metrics: meetings, sales, cancelled (by date_create) ──
     const dealParams = [monthStart, monthEnd, TARGET_SRC];
-    const dealRespFilter = hasResponsible ? `AND d.responsible_id = ANY($4::int[])` : '';
-    if (hasResponsible) dealParams.push(responsibleIds);
+    const dealRespFilter = respFilter(dealParams, 'd.');
+    const dealTargFilterStr = dealTargFilter(dealParams, 'd.');
     const dealMetricsRes = await pool.query(`
       SELECT
         EXTRACT(DAY FROM d.date_create AT TIME ZONE 'Asia/Tashkent')::int AS day,
@@ -133,6 +169,7 @@ router.get('/kunlik', async (req, res) => {
         AND (d.date_create AT TIME ZONE 'Asia/Tashkent')::date <= $2
         AND d.source_id = $3
         ${dealRespFilter}
+        ${dealTargFilterStr}
     `, dealParams);
 
     for (const row of dealMetricsRes.rows) {
@@ -155,8 +192,8 @@ router.get('/kunlik', async (req, res) => {
 
     // ── 4. Kelishuvlar: UC_W35V62 stagega kirgan YOKI sotuv bo'ldi deallar ──
     const kelParams = [monthStart, monthEnd, TARGET_SRC];
-    const kelRespFilter = hasResponsible ? `AND d.responsible_id = ANY($4::int[])` : '';
-    if (hasResponsible) kelParams.push(responsibleIds);
+    const kelRespFilter = respFilter(kelParams, 'd.');
+    const kelTargFilter = dealTargFilter(kelParams, 'd.');
     const kelishuvRes = await pool.query(`
       SELECT DISTINCT ON (d.id)
         EXTRACT(DAY FROM d.date_create AT TIME ZONE 'Asia/Tashkent')::int AS day,
@@ -167,6 +204,7 @@ router.get('/kunlik', async (req, res) => {
         AND (d.date_create AT TIME ZONE 'Asia/Tashkent')::date >= $1
         AND (d.date_create AT TIME ZONE 'Asia/Tashkent')::date <= $2
         ${kelRespFilter}
+        ${kelTargFilter}
         AND (
           s.is_won = true
           OR EXISTS (
