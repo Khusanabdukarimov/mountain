@@ -696,6 +696,15 @@ router.get('/deals-conversion', async (req, res) => {
   if (responsible_id) { extra.push(`AND d.responsible_id::text = ANY(string_to_array($${pi++}, ','))`); params.push(responsible_id); }
   if (stage_id)       { extra.push(`AND d.stage_id::text = ANY(string_to_array($${pi++}, ','))`);       params.push(stage_id); }
   if (source)         { extra.push(`AND ${dealSrcCond(mode, pi++)}`);                                    params.push(source); }
+
+  // Build payment-date subquery extra conditions (same param indices, inner alias d2)
+  // — mirrors /deals-stats' tolanganSubq so "Jami sotuv" here matches the "To'langan" KPI card.
+  const extraPay = [];
+  let pi2 = 3;
+  if (responsible_id) { extraPay.push(`AND d2.responsible_id::text = ANY(string_to_array($${pi2++}, ','))`); }
+  if (stage_id)       { extraPay.push(`AND d2.stage_id::text = ANY(string_to_array($${pi2++}, ','))`); }
+  if (source && mode !== 'amocrm') { extraPay.push(`AND d2.source_id = ANY(string_to_array($${pi2++}, ','))`); }
+
   try {
     const { rows } = await pool.query(
       `WITH fd AS (
@@ -708,22 +717,31 @@ router.get('/deals-conversion', async (req, res) => {
            ${dealModeClause(mode)}
            ${extra.join(' ')}
        ),
-       -- Actual paid amount per deal (deal_payments rows, falling back to uf_paid_sum
-       -- when no individual payment rows were recorded) — "Jami sotuv" must reflect
-       -- money actually received, not the full contract (shartnoma) value.
+       -- Actual paid amount per responsible, by payment date — "Jami sotuv" must reflect
+       -- money actually received in this period, same basis as the "To'langan" KPI card,
+       -- not the full contract (shartnoma) value and not scoped to deal creation date.
        paid AS (
-         SELECT deal_id, SUM(amount)::numeric AS amount FROM (
-           SELECT p.deal_id, p.amount_usd AS amount
+         SELECT responsible_id, SUM(amount)::numeric AS amount FROM (
+           SELECT d2.responsible_id, p.amount_usd AS amount
            FROM deal_payments p
-           JOIN fd ON fd.id = p.deal_id
+           JOIN deals d2 ON d2.id = p.deal_id
+           JOIN stages s2 ON s2.id = d2.stage_id
+           WHERE d2.category_id = 0
+             AND NOT (s2.is_final = true AND s2.is_won = false)
+             AND p.paid_at BETWEEN $1::date AND $2::date
+             ${extraPay.join(' ')}
            UNION ALL
-           SELECT d.id AS deal_id, d.uf_paid_sum AS amount
-           FROM deals d
-           JOIN fd ON fd.id = d.id
-           WHERE d.uf_paid_sum IS NOT NULL AND d.uf_paid_sum > 0
-             AND d.id NOT IN (SELECT DISTINCT deal_id FROM deal_payments)
+           SELECT d2.responsible_id, d2.uf_paid_sum AS amount
+           FROM deals d2
+           JOIN stages s2 ON s2.id = d2.stage_id
+           WHERE d2.category_id = 0
+             AND d2.uf_paid_sum IS NOT NULL AND d2.uf_paid_sum > 0
+             AND s2.is_won = true
+             AND COALESCE(d2.uf_bp_sale_date, d2.uf_payment_date, d2.date_create)::date BETWEEN $1::date AND $2::date
+             AND d2.id NOT IN (SELECT DISTINCT deal_id FROM deal_payments)
+             ${extraPay.join(' ')}
          ) sub
-         GROUP BY deal_id
+         GROUP BY responsible_id
        )
        SELECT
          r.id AS responsible_id,
@@ -733,10 +751,10 @@ router.get('/deals-conversion', async (req, res) => {
          COUNT(fd.id) FILTER (WHERE NOT fd.is_won = true AND NOT fd.is_final)::int AS jarayonda,
          COUNT(fd.id) FILTER (WHERE fd.is_won = true)::int AS sotuv_boldi,
          COUNT(fd.id) FILTER (WHERE fd.is_final AND NOT fd.is_won)::int AS bekor_boldi,
-         COALESCE(SUM(paid.amount) FILTER (WHERE fd.is_won = true AND fd.currency_id = 'USD'), 0)::numeric AS jami_sotuv
+         COALESCE(MAX(paid.amount), 0)::numeric AS jami_sotuv
        FROM responsibles r
        JOIN fd ON fd.responsible_id = r.id
-       LEFT JOIN paid ON paid.deal_id = fd.id
+       LEFT JOIN paid ON paid.responsible_id = r.id
        GROUP BY r.id, r.name, r.last_name, r.work_position
        HAVING COUNT(fd.id) > 0
        ORDER BY total DESC`,
