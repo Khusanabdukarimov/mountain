@@ -426,7 +426,8 @@ router.get('/deal-cancel-reasons', async (req, res) => {
          COUNT(*)::int AS total
        FROM deals d
        JOIN stages s ON s.id = d.stage_id AND s.is_final = true AND s.is_won = false
-       WHERE ($1::date IS NULL OR d.date_create::date >= $1::date)
+       WHERE d.category_id = 0
+         AND ($1::date IS NULL OR d.date_create::date >= $1::date)
          AND ($2::date IS NULL OR d.date_create::date <= $2::date)
          AND ($3::int  IS NULL OR d.responsible_id = $3::int)
          AND (d.source_id IS NULL OR d.source_id NOT ILIKE '%amocrm%')
@@ -453,12 +454,14 @@ router.get('/deal-filter-options', async (req, res) => {
                   FROM responsibles WHERE active = true ORDER BY name`),
       pool.query(`SELECT DISTINCT s.id, s.name FROM stages s
                   INNER JOIN deals d ON d.stage_id = s.id
-                  ${mode === 'amocrm' ? "WHERE d.source_id = 'UC_1WUFJB'" : ""}
+                  WHERE d.category_id = 0
+                    ${mode === 'amocrm' ? "AND d.source_id = 'UC_1WUFJB'" : ""}
                   ORDER BY s.name`),
       mode === 'amocrm'
         ? Promise.resolve({ rows: [] })
         : pool.query(`SELECT DISTINCT source_id FROM deals
-                    WHERE source_id IS NOT NULL AND source_id != ''
+                    WHERE category_id = 0
+                      AND source_id IS NOT NULL AND source_id != ''
                     ORDER BY source_id LIMIT 30`),
     ]);
 
@@ -519,14 +522,16 @@ router.get('/deals-stats', async (req, res) => {
       FROM deal_payments p
       JOIN deals d2 ON d2.id = p.deal_id
       JOIN stages s2 ON s2.id = d2.stage_id
-      WHERE NOT (s2.is_final = true AND s2.is_won = false)
+      WHERE d2.category_id = 0
+        AND NOT (s2.is_final = true AND s2.is_won = false)
         AND p.paid_at BETWEEN $1::date AND $2::date
         ${extraPay.join(' ')}
       UNION ALL
       SELECT d2.uf_paid_sum AS amount
       FROM deals d2
       JOIN stages s2 ON s2.id = d2.stage_id
-      WHERE d2.uf_paid_sum IS NOT NULL AND d2.uf_paid_sum > 0
+      WHERE d2.category_id = 0
+        AND d2.uf_paid_sum IS NOT NULL AND d2.uf_paid_sum > 0
         AND s2.is_won = true
         AND COALESCE(d2.uf_bp_sale_date, d2.uf_payment_date, d2.date_create)::date BETWEEN $1::date AND $2::date
         AND d2.id NOT IN (SELECT DISTINCT deal_id FROM deal_payments)
@@ -551,7 +556,8 @@ router.get('/deals-stats', async (req, res) => {
          FROM deals d
          LEFT JOIN stages s ON s.id = d.stage_id
          LEFT JOIN LATERAL (SELECT phone FROM deal_phones WHERE deal_id = d.id LIMIT 1) ph ON true
-         WHERE ${dealDateCond(mode, 1, 2)}
+         WHERE d.category_id = 0
+           AND ${dealDateCond(mode, 1, 2)}
            ${dealModeClause(mode)}
            ${extra.join(' ')}`,
         params
@@ -572,7 +578,8 @@ router.get('/deals-stats', async (req, res) => {
            AND ($3::text IS NULL OR l.source_id = ANY(string_to_array($3, ',')))
            AND ($4::text IS NULL OR l.id IN (
              SELECT d.lead_id FROM deals d
-             WHERE d.lead_id IS NOT NULL
+             WHERE d.category_id = 0
+               AND d.lead_id IS NOT NULL
                AND d.responsible_id::text = ANY(string_to_array($4, ','))
            ))`,
         [from || null, to || null, source || null, responsible_id || null]
@@ -594,6 +601,7 @@ router.get('/deals-list', async (req, res) => {
   const buildWhere = (extra = []) => {
     const dateCond = dealDateCond(mode, 1, 2);
     const parts = [
+      'd.category_id = 0',
       dateCond.split('\n')[0].trim(),
       dateCond.split('\n')[1].trim().replace(/^AND\s+/i, ''),
       dealModeClause(mode).slice(4)
@@ -695,7 +703,8 @@ router.get('/deals-conversion', async (req, res) => {
          FROM deals d
          JOIN stages s ON s.id = d.stage_id
          LEFT JOIN LATERAL (SELECT phone FROM deal_phones WHERE deal_id = d.id LIMIT 1) ph ON true
-         WHERE ${dealDateCond(mode, 1, 2)}
+         WHERE d.category_id = 0
+           AND ${dealDateCond(mode, 1, 2)}
            ${dealModeClause(mode)}
            ${extra.join(' ')}
        )
@@ -741,7 +750,8 @@ router.get('/deals-responsibles', async (req, res) => {
          FROM deals d
          JOIN stages s ON s.id = d.stage_id
          LEFT JOIN LATERAL (SELECT phone FROM deal_phones WHERE deal_id = d.id LIMIT 1) ph ON true
-         WHERE ${dealDateCond(mode, 1, 2)}
+         WHERE d.category_id = 0
+           AND ${dealDateCond(mode, 1, 2)}
            ${dealModeClause(mode)}
            ${extra.join(' ')}
        )
@@ -2683,7 +2693,8 @@ router.get('/deals-source-stats', async (req, res) => {
        FROM deals d
        JOIN stages s ON s.id = d.stage_id
        LEFT JOIN LATERAL (SELECT phone FROM deal_phones WHERE deal_id = d.id LIMIT 1) ph ON true
-       WHERE ${dealDateCond(mode, 1, 2)}
+       WHERE d.category_id = 0
+         AND ${dealDateCond(mode, 1, 2)}
          ${dealModeClause(mode)}
          ${extra.join(' ')}
        GROUP BY d.source_id
