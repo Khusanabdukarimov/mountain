@@ -450,7 +450,7 @@ def api_meta_page_forms(
     if from_date and to_date:
         # Explicit date range takes priority
         date_params = {"since": from_date, "until": to_date}
-        date_filter = "AND created_time::date BETWEEN :since AND :until"
+        date_filter = "AND (created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date BETWEEN :since AND :until"
     elif month and year:
         m = MONTH_NAMES_MAP.get(month.lower())
         if m:
@@ -460,7 +460,7 @@ def api_meta_page_forms(
                 "since": f"{year}-{m:02d}-01",
                 "until": f"{year}-{m:02d}-{last_day:02d}",
             }
-            date_filter = "AND created_time::date BETWEEN :since AND :until"
+            date_filter = "AND (created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date BETWEEN :since AND :until"
 
     # ── Step 1: DB lead counts per form_id ──────────────────────────
     all_forms: dict = {}
@@ -804,7 +804,7 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
 
         lead_sql = _text(f"""
             SELECT
-                EXTRACT(DAY FROM fl.created_time AT TIME ZONE 'Asia/Tashkent')::int AS day,
+                EXTRACT(DAY FROM (fl.created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours'))::int AS day,
                 COUNT(DISTINCT fl.id) AS leads,
                 COUNT(DISTINCT CASE WHEN (le.id     IS NOT NULL AND s.bitrix_id  = ANY(:sifatli))
                                       OR (dp.deal_id IS NOT NULL AND ds.bitrix_id = ANY(:sifatli))
@@ -824,7 +824,7 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
              AND RIGHT(REGEXP_REPLACE(fl.phone, '[^0-9]', '', 'g'), 9) <> ''
             LEFT JOIN deals  d  ON d.id  = dp.deal_id AND d.lead_id IS NULL
             LEFT JOIN stages ds ON ds.id = d.stage_id AND ds.entity = 'deal'
-            WHERE (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date BETWEEN :since AND :until
+            WHERE (fl.created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date BETWEEN :since AND :until
               {lead_campaign_filter}
               {resp_fb}
             GROUP BY 1
