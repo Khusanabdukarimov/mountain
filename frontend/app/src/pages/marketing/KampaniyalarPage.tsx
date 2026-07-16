@@ -333,16 +333,23 @@ export default function KampaniyalarPage() {
   // Resolve the selected Forma name(s) to form_id(s) so the Kampaniyalar tab's
   // per-campaign counts (Jami lid, Sifatli, etc.) can be scoped to just that
   // form too — not just spend/clicks (which already respect it via formAdsetNames).
+  // Must resolve display names the SAME way optForms does (pageFormsQ name takes
+  // priority over formsQ's own form_name — e.g. "U-Mark " prefix only lives on
+  // pageFormsQ), otherwise filterForm's selected label never matches here.
   const filterFormIds = useMemo(() => {
     if (filterForm.length === 0) return [];
+    const pageNameMap = new Map<string, string>(
+      (pageFormsQ.data?.forms ?? []).map(f => [f.form_id, f.form_name])
+    );
     const ids = new Set<string>();
     for (const camp of formsQ.data?.campaigns ?? []) {
       for (const f of camp.forms) {
-        if (filterForm.includes(f.form_name)) ids.add(f.form_id);
+        const name = pageNameMap.get(f.form_id) ?? f.form_name;
+        if (filterForm.includes(name)) ids.add(f.form_id);
       }
     }
     return [...ids];
-  }, [formsQ.data, filterForm]);
+  }, [formsQ.data, pageFormsQ.data, filterForm]);
 
   const formStatsQ        = useQuery({ queryKey: ["campaign-form-stats", fromDate, toDate, filterFormIds],          queryFn: () => getCampaignFormStats(fromDate, toDate, filterFormIds),                             staleTime: 15_000, refetchInterval: AUTO_REFRESH });
   const assignmentsQ      = useQuery({ queryKey: ["campaign-assignments"],                           queryFn: getCampaignAssignments,                                                   staleTime: 5 * 60_000 });
@@ -424,16 +431,23 @@ export default function KampaniyalarPage() {
   // Adset names linked to the selected Forma (campaign-forms tells us which
   // adsets feed each lead form), so the Forma filter can reach rows/creatives
   // even though those data sources have no form_id of their own.
+  // Must resolve display names the SAME way optForms does (pageFormsQ name takes
+  // priority over formsQ's own form_name — e.g. "U-Mark " prefix only lives on
+  // pageFormsQ), otherwise filterForm's selected label never matches here.
   const formAdsetNames = useMemo(() => {
     if (filterForm.length === 0) return null;
+    const pageNameMap = new Map<string, string>(
+      (pageFormsQ.data?.forms ?? []).map(f => [f.form_id, f.form_name])
+    );
     const set = new Set<string>();
     for (const camp of formsQ.data?.campaigns ?? []) {
       for (const f of camp.forms) {
-        if (filterForm.includes(f.form_name) && f.adset_name) set.add(f.adset_name);
+        const name = pageNameMap.get(f.form_id) ?? f.form_name;
+        if (filterForm.includes(name) && f.adset_name) set.add(f.adset_name);
       }
     }
     return set;
-  }, [formsQ.data, filterForm]);
+  }, [formsQ.data, pageFormsQ.data, filterForm]);
 
   // Adset names linked to the selected Creative(s) (creativesQ carries both
   // ad_name and adset_name), so the Creative filter can reach rows too —
