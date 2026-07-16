@@ -393,10 +393,11 @@ export type CampaignFormStat = {
   sotuv_boldi:   number;
 };
 
-export function getCampaignFormStats(from?: string, to?: string) {
+export function getCampaignFormStats(from?: string, to?: string, formIds?: string[]) {
   return apiGet<{ rows: CampaignFormStat[] }>('/api/campaigns/form-stats', {
     ...(from ? { from } : {}),
     ...(to   ? { to }   : {}),
+    ...(formIds && formIds.length ? { form_id: formIds.join(',') } : {}),
   });
 }
 

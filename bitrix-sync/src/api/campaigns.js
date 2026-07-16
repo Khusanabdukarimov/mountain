@@ -306,11 +306,19 @@ router.get('/active-names', async (req, res) => {
   }
 });
 
-// GET /api/campaigns/form-stats?from=2026-06-01&to=2026-06-15
+// GET /api/campaigns/form-stats?from=2026-06-01&to=2026-06-15&form_id=123,456
 router.get('/form-stats', async (req, res) => {
   const from = req.query.from || null;
   const to   = req.query.to   || null;
+  const formIds = (req.query.form_id || '').split(',').map(s => s.trim()).filter(Boolean);
   try {
+    const baseParams = [from, to].filter(Boolean);
+    let formFilterIdx = null;
+    if (formIds.length) {
+      baseParams.push(formIds);
+      formFilterIdx = baseParams.length;
+    }
+    const formFilterClause = formFilterIdx ? `AND fl.form_id = ANY($${formFilterIdx}::text[])` : '';
     const { rows } = await pool.query(`
       WITH real_sotuv AS (
         -- Path A: deals -> lead_id -> leads -> utm_campaign
@@ -366,9 +374,10 @@ router.get('/form-stats', async (req, res) => {
       WHERE fl.campaign_name IS NOT NULL
         ${from ? `AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date >= $1::date` : ''}
         ${to   ? `AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date <= ${ from ? '$2' : '$1' }::date` : ''}
+        ${formFilterClause}
       GROUP BY fl.campaign_name, sc.sotuv_boldi
       ORDER BY jami_lid DESC
-    `, [from, to].filter(Boolean));
+    `, baseParams);
     res.json({ rows });
   } catch (err) {
     console.error('[campaigns/form-stats]', err.message);

@@ -329,7 +329,22 @@ export default function KampaniyalarPage() {
   const kunlikQ          = useQuery({ queryKey: ["kunlik-hisobot",  month, year],                   queryFn: () => getKunlikHisobot(month, year),                                      staleTime: 60_000, refetchInterval: AUTO_REFRESH });
   const creativesQ       = useQuery({ queryKey: ["creatives",       month, year, fromDate, toDate, sotuvFrom, sotuvTo], queryFn: () => getCampaignCreatives(month, year, fromDate, toDate, sotuvFrom || undefined, sotuvTo || undefined), staleTime: 30_000, refetchInterval: AUTO_REFRESH });
   const activeCampNamesQ  = useQuery({ queryKey: ["active-campaign-names"],                          queryFn: getActiveCampaignNames,                                                   staleTime: 5 * 60_000 });
-  const formStatsQ        = useQuery({ queryKey: ["campaign-form-stats", fromDate, toDate],          queryFn: () => getCampaignFormStats(fromDate, toDate),                             staleTime: 15_000, refetchInterval: AUTO_REFRESH });
+
+  // Resolve the selected Forma name(s) to form_id(s) so the Kampaniyalar tab's
+  // per-campaign counts (Jami lid, Sifatli, etc.) can be scoped to just that
+  // form too — not just spend/clicks (which already respect it via formAdsetNames).
+  const filterFormIds = useMemo(() => {
+    if (filterForm.length === 0) return [];
+    const ids = new Set<string>();
+    for (const camp of formsQ.data?.campaigns ?? []) {
+      for (const f of camp.forms) {
+        if (filterForm.includes(f.form_name)) ids.add(f.form_id);
+      }
+    }
+    return [...ids];
+  }, [formsQ.data, filterForm]);
+
+  const formStatsQ        = useQuery({ queryKey: ["campaign-form-stats", fromDate, toDate, filterFormIds],          queryFn: () => getCampaignFormStats(fromDate, toDate, filterFormIds),                             staleTime: 15_000, refetchInterval: AUTO_REFRESH });
   const assignmentsQ      = useQuery({ queryKey: ["campaign-assignments"],                           queryFn: getCampaignAssignments,                                                   staleTime: 5 * 60_000 });
 
   const allRows = campaignsQ.data?.rows ?? [];
