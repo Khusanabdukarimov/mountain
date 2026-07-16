@@ -29,8 +29,30 @@ ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 AUTH_ENABLED = os.getenv("AUTH_ENABLED", "false").lower() == "true"
 
 
+def _parse_static_users(raw: str) -> dict:
+    """Parse AUTH_USERS env — "user1:pass1,user2:pass2" — all get role=admin.
+
+    Passwords may not contain ':' or ','. Malformed entries are skipped.
+    """
+    users: dict[str, str] = {}
+    for entry in raw.split(","):
+        entry = entry.strip()
+        if not entry or ":" not in entry:
+            continue
+        uname, _, pwd = entry.partition(":")
+        if uname.strip() and pwd:
+            users[uname.strip()] = pwd
+    return users
+
+
+# Static admin users — ADMIN_USERNAME/ADMIN_PASSWORD pair plus any AUTH_USERS entries.
+STATIC_USERS: dict[str, str] = _parse_static_users(os.getenv("AUTH_USERS", ""))
+if ADMIN_PASSWORD:
+    STATIC_USERS.setdefault(ADMIN_USERNAME, ADMIN_PASSWORD)
+
+
 def is_auth_enabled() -> bool:
-    return AUTH_ENABLED and bool(ADMIN_PASSWORD)
+    return AUTH_ENABLED and bool(STATIC_USERS)
 
 
 # ── Password hashing (stdlib PBKDF2, no external deps) ──────────────
@@ -129,18 +151,16 @@ def login(payload: LoginIn) -> dict:
     except Exception:
         pass  # DB not ready or other error — fall through to admin check
 
-    # 2. Fall back to admin env var
-    if not ADMIN_PASSWORD:
-        raise HTTPException(status_code=500, detail="ADMIN_PASSWORD env not set")
-    if pwd != ADMIN_PASSWORD:
+    # 2. Fall back to static admin users (ADMIN_USERNAME/ADMIN_PASSWORD + AUTH_USERS env)
+    if not STATIC_USERS:
+        raise HTTPException(status_code=500, detail="No auth users configured")
+    if not uname or STATIC_USERS.get(uname) != pwd:
         raise HTTPException(status_code=401, detail="Login yoki parol noto'g'ri")
-    if uname and uname != ADMIN_USERNAME:
-        raise HTTPException(status_code=401, detail="Login yoki parol noto'g'ri")
-    token = create_token(ADMIN_USERNAME, role="admin")
+    token = create_token(uname, role="admin")
     return {
         "access_token": token,
         "token_type": "bearer",
-        "username": ADMIN_USERNAME,
+        "username": uname,
         "role": "admin",
         "emp_id": None,
     }

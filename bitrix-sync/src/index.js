@@ -27,6 +27,10 @@ app.disable('etag'); // Prevent 304 responses with stale cached API data
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
+// JWT auth for /api/* (no-op unless AUTH_ENABLED=true + JWT_SECRET set)
+const { authMiddleware } = require('./middleware/auth');
+app.use(authMiddleware);
+
 // ── Webhook routes ────────────────────────────────────────────
 app.post('/webhook/lead/created', leadCreated);
 app.post('/webhook/lead/updated', leadUpdated);
