@@ -16,6 +16,7 @@ import {
 } from "@/lib/api/leads";
 import { fmtNum } from "@/lib/utils";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
+import { DateRangePicker } from "@/components/DateRangePicker";
 
 // ── Date helpers ──────────────────────────────────────────────────
 const localISO = (d: Date) =>
@@ -577,58 +578,41 @@ export default function LidlarPage() {
               overflow: "visible",
             }}>
               <div style={{ padding: "16px 20px" }}>
-                {/* Quick date presets */}
-                {(() => {
-                  const presets = [
-                    { label: "Bugun",    start: todayISO(),    end: todayISO() },
-                    { label: "7 kun",    start: daysAgoISO(7), end: todayISO() },
-                    { label: "30 kun",   start: daysAgoISO(30),end: todayISO() },
-                    { label: "90 kun",   start: daysAgoISO(90),end: todayISO() },
-                    { label: "Barchasi", start: "",             end: "" },
-                  ];
-                  return (
-                    <div style={{ display: "flex", gap: 6, marginBottom: 14, flexWrap: "wrap" }}>
-                      {presets.map((p) => {
-                        const active = applied.start_date === (p.start || undefined) && applied.end_date === (p.end || undefined);
-                        return (
-                          <button key={p.label}
-                            onClick={() => setApplied((prev) => ({ ...prev, start_date: p.start || undefined, end_date: p.end || undefined }))}
-                            style={{
-                              background: active ? "#2196F3" : "var(--bg3)",
-                              border: `1px solid ${active ? "#2196F3" : "var(--border)"}`,
-                              color: active ? "#fff" : "#9E9E9E",
-                              borderRadius: 20, padding: "5px 14px",
-                              fontSize: 12, fontWeight: active ? 600 : 400,
-                              cursor: "pointer", transition: "all 0.15s",
-                            }}
-                          >
-                            {p.label}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  );
-                })()}
-
-                {/* Date row */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
-                  <div>
-                    <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 600, color: "var(--text3)", marginBottom: 6 }}>
-                      <Calendar size={12} />{mode === 'amocrm' ? "Dan (amoCRM)" : "Dan (boshlanish)"}
-                    </label>
-                    <input type="date" value={applied.start_date ?? ""}
-                      onChange={(e) => setApplied((p) => ({ ...p, start_date: e.target.value || undefined }))}
-                      style={{ width: "100%", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, color: "var(--text)", fontSize: 12, padding: "8px 10px", outline: "none", boxSizing: "border-box" }}
+                {/* Davr — sana oralig'i + tezkor presetlar */}
+                <div style={{ marginBottom: 14 }}>
+                  <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 600, color: "var(--text3)", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                    <Calendar size={12} />{mode === 'amocrm' ? "Davr (amoCRM)" : "Davr"}
+                  </label>
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <DateRangePicker
+                      start={applied.start_date} end={applied.end_date}
+                      onChange={(s, e) => setApplied((p) => ({ ...p, start_date: s, end_date: e }))}
+                      onClear={() => setApplied((p) => ({ ...p, start_date: undefined, end_date: undefined }))}
                     />
-                  </div>
-                  <div>
-                    <label style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 600, color: "var(--text3)", marginBottom: 6 }}>
-                      <Calendar size={12} />{mode === 'amocrm' ? "Gacha (amoCRM)" : "Gacha (tugash)"}
-                    </label>
-                    <input type="date" value={applied.end_date ?? ""}
-                      onChange={(e) => setApplied((p) => ({ ...p, end_date: e.target.value || undefined }))}
-                      style={{ width: "100%", background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 8, color: "var(--text)", fontSize: 12, padding: "8px 10px", outline: "none", boxSizing: "border-box" }}
-                    />
+                    {[
+                      { label: "Bugun",      start: todayISO(),    end: todayISO() },
+                      { label: "7 kun",      start: daysAgoISO(7), end: todayISO() },
+                      { label: "30 kun",     start: daysAgoISO(30),end: todayISO() },
+                      { label: "90 kun",     start: daysAgoISO(90),end: todayISO() },
+                      { label: "Butun davr", start: "",             end: "" },
+                    ].map((p) => {
+                      const active = applied.start_date === (p.start || undefined) && applied.end_date === (p.end || undefined);
+                      return (
+                        <button key={p.label}
+                          onClick={() => setApplied((prev) => ({ ...prev, start_date: p.start || undefined, end_date: p.end || undefined }))}
+                          style={{
+                            background: active ? "#2196F3" : "var(--bg3)",
+                            border: `1px solid ${active ? "#2196F3" : "var(--border)"}`,
+                            color: active ? "#fff" : "#9E9E9E",
+                            borderRadius: 20, padding: "5px 14px",
+                            fontSize: 12, fontWeight: active ? 600 : 400,
+                            cursor: "pointer", transition: "all 0.15s",
+                          }}
+                        >
+                          {p.label}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
 

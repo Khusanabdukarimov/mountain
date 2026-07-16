@@ -1,8 +1,9 @@
 import { useMemo, useState, useRef, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
-  RefreshCw, Search, ChevronDown, TrendingUp, Filter, X, Download,
+  RefreshCw, Search, ChevronDown, TrendingUp, Filter, X, Download, Calendar,
 } from "lucide-react";
+import { DateRangePicker } from "@/components/DateRangePicker";
 import * as XLSX from "xlsx";
 import { Skeleton } from "@/components/Skeleton";
 import {
@@ -291,6 +292,7 @@ const KAMP_PRESETS = [
   { label: "Bugun",    f: () => getTodayIso(),      t: () => getTodayIso() },
   { label: "7 kun",    f: () => { const d = new Date(); d.setDate(d.getDate() - 7); return d.toISOString().slice(0, 10); }, t: () => getTodayIso() },
   { label: "30 kun",   f: () => { const d = new Date(); d.setDate(d.getDate() - 30); return d.toISOString().slice(0, 10); }, t: () => getTodayIso() },
+  { label: "90 kun",   f: () => { const d = new Date(); d.setDate(d.getDate() - 90); return d.toISOString().slice(0, 10); }, t: () => getTodayIso() },
   { label: "Bu oy",    f: () => getFirstOfMonth(),  t: () => getTodayIso() },
 ];
 
@@ -659,7 +661,6 @@ const formDbStatsMap = useMemo(() => {
       {/* ── Filter panel ─────────────────────────────────────────────────────── */}
       {(() => {
         const hasExtra = !!(filterTargetologs.length || filterCampaigns.length || filterPlatforms.length || filterForm.length || filterAdsets.length || filterCreatives.length);
-        const selStyle: React.CSSProperties = { width: "100%", padding: "8px 10px", fontSize: 12, background: "var(--bg3)", border: "1px solid var(--border)", color: "var(--text)", borderRadius: 8 };
         const clearAll = () => { setFilterTargetologs([]); setFilterCampaigns([]); setFilterPlatforms([]); setFilterForm([]); setFilterAdsets([]); setFilterCreatives([]); setSotuvFrom(""); setSotuvTo(""); setFromDate(getFirstOfMonth()); setToDate(getTodayIso()); };
         return (
           <div style={{ background: "var(--bg2)", borderBottom: "1px solid var(--border)", overflow: filterOpen ? "visible" : "hidden", position: "sticky", top: 0, zIndex: 10 }}>
@@ -680,29 +681,27 @@ const formDbStatsMap = useMemo(() => {
 
             {filterOpen && (
               <div style={{ borderTop: "1px solid var(--border)", padding: "16px 20px" }}>
-                {/* Quick presets */}
-                <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-                  {KAMP_PRESETS.map(p => {
-                    const pf = p.f(), pt = p.t();
-                    const active = fromDate === pf && toDate === pt;
-                    return (
-                      <button key={p.label} onClick={() => { setFromDate(pf); setToDate(pt); }}
-                        style={{ padding: "5px 14px", borderRadius: 20, fontSize: 12, cursor: "pointer", background: active ? "#3b82f6" : "var(--bg3)", border: `1px solid ${active ? "#3b82f6" : "var(--border)"}`, color: active ? "#fff" : "var(--text2)", fontWeight: active ? 600 : 400 }}>
-                        {p.label}
-                      </button>
-                    );
-                  })}
-                </div>
-
-                {/* Date inputs — lead date range */}
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
-                  <div>
-                    <div style={{ fontSize: 11, color: "var(--text3)", marginBottom: 4 }}>Dan (boshlanish)</div>
-                    <input type="date" value={fromDate} onChange={e => setFromDate(e.target.value)} style={selStyle} />
+                {/* Davr — sana oralig'i + tezkor presetlar */}
+                <div style={{ marginBottom: 14 }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 600, color: "var(--text3)", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                    <Calendar size={12} /> Davr
                   </div>
-                  <div>
-                    <div style={{ fontSize: 11, color: "var(--text3)", marginBottom: 4 }}>Gacha (tugash)</div>
-                    <input type="date" value={toDate} onChange={e => setToDate(e.target.value)} style={selStyle} />
+                  <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                    <DateRangePicker
+                      start={fromDate} end={toDate}
+                      onChange={(s, e) => { setFromDate(s); setToDate(e); }}
+                      onClear={() => { setFromDate(getFirstOfMonth()); setToDate(getTodayIso()); }}
+                    />
+                    {KAMP_PRESETS.map(p => {
+                      const pf = p.f(), pt = p.t();
+                      const active = fromDate === pf && toDate === pt;
+                      return (
+                        <button key={p.label} onClick={() => { setFromDate(pf); setToDate(pt); }}
+                          style={{ padding: "5px 14px", borderRadius: 20, fontSize: 12, cursor: "pointer", background: active ? "#3b82f6" : "var(--bg3)", border: `1px solid ${active ? "#3b82f6" : "var(--border)"}`, color: active ? "#fff" : "var(--text2)", fontWeight: active ? 600 : 400 }}>
+                          {p.label}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
 
@@ -717,12 +716,12 @@ const formDbStatsMap = useMemo(() => {
                       </button>
                     )}
                   </div>
-                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                    <input type="date" value={sotuvFrom} onChange={e => setSotuvFrom(e.target.value)}
-                      placeholder="dan" style={selStyle} />
-                    <input type="date" value={sotuvTo} onChange={e => setSotuvTo(e.target.value)}
-                      placeholder="gacha" style={selStyle} />
-                  </div>
+                  <DateRangePicker
+                    start={sotuvFrom || undefined} end={sotuvTo || undefined}
+                    onChange={(s, e) => { setSotuvFrom(s); setSotuvTo(e); }}
+                    onClear={() => { setSotuvFrom(""); setSotuvTo(""); }}
+                    placeholder="Sana tanlang (ixtiyoriy)"
+                  />
                 </div>
 
                 {/* Multi-select filters row 1 */}

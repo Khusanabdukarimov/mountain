@@ -3,8 +3,9 @@ import { useQuery } from "@tanstack/react-query";
 import {
   Phone, PhoneOutgoing, PhoneIncoming, CheckCircle, XCircle,
   Clock, PhoneMissed, Timer, ChevronDown, ChevronUp,
-  Download, PhoneOff, Search,
+  Download, PhoneOff, Search, Calendar,
 } from "lucide-react";
+import { DateRangePicker } from "@/components/DateRangePicker";
 import { Topbar } from "@/components/Topbar";
 import {
   getPyCallStats, getCallList, getCallFilterOptions,
@@ -331,28 +332,29 @@ export default function CallStatistikasi() {
 
           {filterOpen && (
             <div style={{ borderTop: "1px solid var(--border)", padding: "16px 20px" }}>
-              {/* Quick presets */}
-              <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-                {CALL_PRESETS.map(p => {
-                  const active = filters.start_date === p.f && filters.end_date === p.t;
-                  return (
-                    <button key={p.label} onClick={() => update({ start_date: p.f, end_date: p.t })}
-                      style={{ padding: "5px 14px", borderRadius: 20, fontSize: 12, cursor: "pointer", background: active ? "#3b82f6" : "var(--bg3)", border: `1px solid ${active ? "#3b82f6" : "var(--border)"}`, color: active ? "#fff" : "var(--text2)", fontWeight: active ? 600 : 400 }}>
-                      {p.label}
-                    </button>
-                  );
-                })}
-              </div>
-
-              {/* Date inputs */}
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
-                <div>
-                  <div style={{ fontSize: 11, color: "var(--text3)", marginBottom: 4 }}>Dan (boshlanish)</div>
-                  <input type="date" value={filters.start_date} onChange={e => update({ start_date: e.target.value })} style={selStyle} />
+              {/* Davr — sana oralig'i + tezkor presetlar */}
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 600, color: "var(--text3)", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                  <Calendar size={12} /> Davr
                 </div>
-                <div>
-                  <div style={{ fontSize: 11, color: "var(--text3)", marginBottom: 4 }}>Gacha (tugash)</div>
-                  <input type="date" value={filters.end_date} onChange={e => update({ end_date: e.target.value })} style={selStyle} />
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <DateRangePicker
+                    start={filters.start_date} end={filters.end_date}
+                    onChange={(s, e) => update({ start_date: s, end_date: e })}
+                    onClear={() => {
+                      const d = defaultCallFilters();
+                      update({ start_date: d.start_date, end_date: d.end_date });
+                    }}
+                  />
+                  {CALL_PRESETS.map(p => {
+                    const active = filters.start_date === p.f && filters.end_date === p.t;
+                    return (
+                      <button key={p.label} onClick={() => update({ start_date: p.f, end_date: p.t })}
+                        style={{ padding: "5px 14px", borderRadius: 20, fontSize: 12, cursor: "pointer", background: active ? "#3b82f6" : "var(--bg3)", border: `1px solid ${active ? "#3b82f6" : "var(--border)"}`, color: active ? "#fff" : "var(--text2)", fontWeight: active ? 600 : 400 }}>
+                        {p.label}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 

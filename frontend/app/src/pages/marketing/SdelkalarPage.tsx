@@ -4,8 +4,9 @@ import { useQuery, keepPreviousData } from "@tanstack/react-query";
 import {
   Search,
   TrendingUp, DollarSign, CheckCircle, Percent, ShoppingCart,
-  ChevronDown, Users, BarChart2,
+  ChevronDown, Users, BarChart2, Calendar,
 } from "lucide-react";
+import { DateRangePicker } from "@/components/DateRangePicker";
 import { Topbar } from "@/components/Topbar";
 import {
   getDealKpiStats, getDealsList, getDealFilterOptions,
@@ -604,36 +605,31 @@ export default function SdelkalarPage() {
 
           {filterOpen && (
             <div style={{ borderTop: "1px solid var(--border)", padding: "16px 20px" }}>
-              {/* Quick date presets */}
-              <div style={{ display: "flex", gap: 8, marginBottom: 14, flexWrap: "wrap" }}>
-                {PRESETS.map(p => {
-                  const active = filter.from === p.f && filter.to === p.t;
-                  return (
-                    <button key={p.label} onClick={() => setFilter(s => ({ ...s, from: p.f, to: p.t }))}
-                      style={{
-                        padding: "5px 14px", borderRadius: 20, fontSize: 12, cursor: "pointer",
-                        background: active ? "#3b82f6" : "var(--bg3)",
-                        border: `1px solid ${active ? "#3b82f6" : "var(--border)"}`,
-                        color: active ? "#fff" : "var(--text2)", fontWeight: active ? 600 : 400,
-                      }}>
-                      {p.label}
-                    </button>
-                  );
-                })}
-              </div>
-
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, marginBottom: 14 }}>
-                <div>
-                  <div style={{ fontSize: 11, color: "var(--text3)", marginBottom: 4 }}>Dan (boshlanish)</div>
-                  <input type="date" value={filter.from}
-                    onChange={e => setFilter(s => ({ ...s, from: e.target.value }))}
-                    style={{ width: "100%", padding: "8px 10px", fontSize: 12, background: "var(--bg3)", border: "1px solid var(--border)", color: "var(--text)", borderRadius: 8 }} />
+              {/* Davr — sana oralig'i + tezkor presetlar */}
+              <div style={{ marginBottom: 14 }}>
+                <div style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 11, fontWeight: 600, color: "var(--text3)", marginBottom: 6, textTransform: "uppercase", letterSpacing: "0.04em" }}>
+                  <Calendar size={12} /> Davr
                 </div>
-                <div>
-                  <div style={{ fontSize: 11, color: "var(--text3)", marginBottom: 4 }}>Gacha (tugash)</div>
-                  <input type="date" value={filter.to}
-                    onChange={e => setFilter(s => ({ ...s, to: e.target.value }))}
-                    style={{ width: "100%", padding: "8px 10px", fontSize: 12, background: "var(--bg3)", border: "1px solid var(--border)", color: "var(--text)", borderRadius: 8 }} />
+                <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+                  <DateRangePicker
+                    start={filter.from} end={filter.to}
+                    onChange={(s, e) => setFilter(prev => ({ ...prev, from: s, to: e }))}
+                    onClear={() => setFilter(prev => ({ ...prev, from: startOfMonthISO(), to: todayISO() }))}
+                  />
+                  {PRESETS.map(p => {
+                    const active = filter.from === p.f && filter.to === p.t;
+                    return (
+                      <button key={p.label} onClick={() => setFilter(s => ({ ...s, from: p.f, to: p.t }))}
+                        style={{
+                          padding: "5px 14px", borderRadius: 20, fontSize: 12, cursor: "pointer",
+                          background: active ? "#3b82f6" : "var(--bg3)",
+                          border: `1px solid ${active ? "#3b82f6" : "var(--border)"}`,
+                          color: active ? "#fff" : "var(--text2)", fontWeight: active ? 600 : 400,
+                        }}>
+                        {p.label}
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
 
