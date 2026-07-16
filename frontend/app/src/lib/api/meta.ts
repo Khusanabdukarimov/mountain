@@ -384,6 +384,7 @@ export function getActiveCampaignNames() {
 export type CampaignFormStat = {
   campaign_name: string;
   jami_lid:      number;
+  tasdiqlangan:  number;
   bitrixda_bor:  number;
   bitrixda_yoq:  number;
   sifatli:       number;

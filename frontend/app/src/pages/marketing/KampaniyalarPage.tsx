@@ -977,15 +977,15 @@ const formDbStatsMap = useMemo(() => {
                   .filter(r => !search || r.campaign_name.toLowerCase().includes(search.toLowerCase()));
 
                 const totals = fsRows.reduce(
-                  (a, r) => ({ jami: a.jami + r.jami_lid, sifatli: a.sifatli + r.sifatli, sifatsiz: a.sifatsiz + r.sifatsiz, bekor: a.bekor + r.bekor_boldi, sotuv: a.sotuv + r.sotuv_boldi, spend: a.spend + (spendMap.get(r.campaign_name)?.spend ?? 0) }),
-                  { jami: 0, sifatli: 0, sifatsiz: 0, bekor: 0, sotuv: 0, spend: 0 },
+                  (a, r) => ({ jami: a.jami + r.jami_lid, tasdiqlangan: a.tasdiqlangan + r.tasdiqlangan, sifatli: a.sifatli + r.sifatli, sifatsiz: a.sifatsiz + r.sifatsiz, bekor: a.bekor + r.bekor_boldi, sotuv: a.sotuv + r.sotuv_boldi, spend: a.spend + (spendMap.get(r.campaign_name)?.spend ?? 0) }),
+                  { jami: 0, tasdiqlangan: 0, sifatli: 0, sifatsiz: 0, bekor: 0, sotuv: 0, spend: 0 },
                 );
 
                 return (
                   <table className="w-full text-[12.5px]">
                     <thead>
                       <tr className="bg-bg3 border-b border-border">
-                        {["#", "KAMPANIYA", "SARF", "JAMI LID", "SIFATLI", "SIFATSIZ", "BEKOR", "SOTUV", "SIFAT %"].map(h => (
+                        {["#", "KAMPANIYA", "SARF", "JAMI LID", "TASDIQLANGAN", "SIFATLI", "SIFATSIZ", "BEKOR", "SOTUV", "SIFAT %"].map(h => (
                           <th key={h} className="px-4 py-2.5 text-left text-[10px] font-bold text-text3 tracking-wider">{h}</th>
                         ))}
                       </tr>
@@ -994,23 +994,29 @@ const formDbStatsMap = useMemo(() => {
                       {(campaignsQ.isLoading || formStatsQ.isLoading) ? (
                         Array.from({ length: 5 }).map((_, i) => (
                           <tr key={i} className="border-b border-border">
-                            {Array.from({ length: 9 }).map((__, j) => (
+                            {Array.from({ length: 10 }).map((__, j) => (
                               <td key={j} className="px-4 py-3"><Skeleton className="h-3.5 w-16" /></td>
                             ))}
                           </tr>
                         ))
                       ) : fsRows.length === 0 ? (
-                        <tr><td colSpan={9} className="px-4 py-10 text-center text-text3">Ma'lumot topilmadi</td></tr>
+                        <tr><td colSpan={10} className="px-4 py-10 text-center text-text3">Ma'lumot topilmadi</td></tr>
                       ) : fsRows.map((r, i) => {
                         const meta = spendMap.get(r.campaign_name);
                         const sifatPct = r.jami_lid > 0 ? Math.round((r.sifatli / r.jami_lid) * 100) : 0;
                         const sifatColor = sifatPct >= 50 ? "#22c55e" : sifatPct >= 30 ? "#f59e0b" : "#ef4444";
+                        const tasdiqPct = r.jami_lid > 0 ? Math.round((r.tasdiqlangan / r.jami_lid) * 100) : 0;
+                        const tasdiqColor = tasdiqPct >= 70 ? "#22c55e" : tasdiqPct >= 40 ? "#f59e0b" : "#ef4444";
                         return (
                           <tr key={r.campaign_name} className="border-b border-border hover:bg-bg3/50">
                             <td className="px-4 py-3 text-text3 font-mono text-[11px]">{String(i + 1).padStart(2, "0")}</td>
                             <td className="px-4 py-3 font-medium text-text max-w-[220px] truncate" title={r.campaign_name}>{r.campaign_name}</td>
                             <td className="px-4 py-3 font-semibold text-text">{meta ? `$${Math.round(meta.spend)}` : "—"}</td>
                             <td className="px-4 py-3 font-bold text-blue">{r.jami_lid}</td>
+                            <td className="px-4 py-3" title="Haqiqiy telefon raqami bilan (spam/test emas)">
+                              <span className="font-semibold" style={{ color: tasdiqColor }}>{r.tasdiqlangan}</span>
+                              <span className="text-text3 text-[10.5px]"> ({tasdiqPct}%)</span>
+                            </td>
                             <td className="px-4 py-3 font-semibold text-green">{r.sifatli}</td>
                             <td className="px-4 py-3 text-red/80">{r.sifatsiz || "—"}</td>
                             <td className="px-4 py-3 text-amber">{r.bekor_boldi || "—"}</td>
@@ -1033,6 +1039,7 @@ const formDbStatsMap = useMemo(() => {
                           <td className="px-4 py-2.5 text-[11px] font-bold text-text" colSpan={2}>JAMI</td>
                           <td className="px-4 py-2.5 font-bold text-text">${Math.round(totals.spend)}</td>
                           <td className="px-4 py-2.5 font-bold text-blue">{totals.jami}</td>
+                          <td className="px-4 py-2.5 font-bold text-text">{totals.tasdiqlangan}</td>
                           <td className="px-4 py-2.5 font-bold text-green">{totals.sifatli}</td>
                           <td className="px-4 py-2.5 text-red/80">{totals.sifatsiz}</td>
                           <td className="px-4 py-2.5 text-amber">{totals.bekor}</td>

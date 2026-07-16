@@ -343,6 +343,11 @@ router.get('/form-stats', async (req, res) => {
       SELECT
         fl.campaign_name,
         COUNT(DISTINCT fl.id)::int                                                                                                 AS jami_lid,
+        -- "Tasdiqlangan" = real phone number (>=9 digits after stripping non-digits).
+        -- Filters out spam/bot submissions ("1", "Ttff", etc.) that inflate jami_lid
+        -- but were never real people — see spam wave found in Mountain 13.07 / patent
+        -- campaigns on 2026-07-15 (27 of 43 leads had junk phones).
+        COUNT(DISTINCT CASE WHEN LENGTH(REGEXP_REPLACE(fl.phone, '[^0-9]', '', 'g')) >= 9 THEN fl.id END)::int              AS tasdiqlangan,
         COUNT(DISTINCT CASE WHEN le.id IS NOT NULL OR dp.deal_id IS NOT NULL THEN fl.id END)::int                              AS bitrixda_bor,
         COUNT(DISTINCT CASE WHEN le.id IS NULL AND dp.deal_id IS NULL THEN fl.id END)::int                                     AS bitrixda_yoq,
         COUNT(DISTINCT CASE WHEN (le.id IS NOT NULL AND s.bitrix_id IN ('THINKING','UC_KXC3ZW','CONSULTATION','UC_L28G68','NOT_TRANSFERRED','UC_5G8244','CONVERTED_CONSULT','CONVERTED','UC_NAZK5J','RECYCLED'))
