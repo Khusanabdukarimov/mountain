@@ -707,6 +707,23 @@ router.get('/deals-conversion', async (req, res) => {
            AND ${dealDateCond(mode, 1, 2)}
            ${dealModeClause(mode)}
            ${extra.join(' ')}
+       ),
+       -- Actual paid amount per deal (deal_payments rows, falling back to uf_paid_sum
+       -- when no individual payment rows were recorded) — "Jami sotuv" must reflect
+       -- money actually received, not the full contract (shartnoma) value.
+       paid AS (
+         SELECT deal_id, SUM(amount)::numeric AS amount FROM (
+           SELECT p.deal_id, p.amount_usd AS amount
+           FROM deal_payments p
+           JOIN fd ON fd.id = p.deal_id
+           UNION ALL
+           SELECT d.id AS deal_id, d.uf_paid_sum AS amount
+           FROM deals d
+           JOIN fd ON fd.id = d.id
+           WHERE d.uf_paid_sum IS NOT NULL AND d.uf_paid_sum > 0
+             AND d.id NOT IN (SELECT DISTINCT deal_id FROM deal_payments)
+         ) sub
+         GROUP BY deal_id
        )
        SELECT
          r.id AS responsible_id,
@@ -716,9 +733,10 @@ router.get('/deals-conversion', async (req, res) => {
          COUNT(fd.id) FILTER (WHERE NOT fd.is_won = true AND NOT fd.is_final)::int AS jarayonda,
          COUNT(fd.id) FILTER (WHERE fd.is_won = true)::int AS sotuv_boldi,
          COUNT(fd.id) FILTER (WHERE fd.is_final AND NOT fd.is_won)::int AS bekor_boldi,
-         COALESCE(SUM(fd.opportunity) FILTER (WHERE fd.is_won = true AND fd.currency_id = 'USD'), 0)::numeric AS jami_sotuv
+         COALESCE(SUM(paid.amount) FILTER (WHERE fd.is_won = true AND fd.currency_id = 'USD'), 0)::numeric AS jami_sotuv
        FROM responsibles r
        JOIN fd ON fd.responsible_id = r.id
+       LEFT JOIN paid ON paid.deal_id = fd.id
        GROUP BY r.id, r.name, r.last_name, r.work_position
        HAVING COUNT(fd.id) > 0
        ORDER BY total DESC`,
