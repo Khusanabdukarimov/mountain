@@ -961,12 +961,18 @@ const formDbStatsMap = useMemo(() => {
 
               {/* ── Kampaniyalar tab ── */}
               {tab === "kampaniyalar" && (() => {
-                // merge Meta Ads spend/clicks with form-lead stats per campaign
-                const spendMap = new Map<string, { spend: number; clicks: number }>();
+                // merge Meta Ads spend/clicks/leads with form-lead stats per campaign.
+                // r.leads here is Meta's own ad-attributed "Results" count (from
+                // meta_ad_daily, synced via actionVal(actions, LEAD_TYPES)) — shown as
+                // "SARALANGAN" so it's visible alongside our own raw/validated counts,
+                // since Meta's number can include submissions with junk data that our
+                // phone-validation (TASDIQLANGAN) filters out.
+                const spendMap = new Map<string, { spend: number; clicks: number; leads: number }>();
                 for (const r of rows) {
-                  const cur = spendMap.get(r.campaign_name) ?? { spend: 0, clicks: 0 };
+                  const cur = spendMap.get(r.campaign_name) ?? { spend: 0, clicks: 0, leads: 0 };
                   cur.spend  += r.spend;
                   cur.clicks += r.clicks;
+                  cur.leads  += r.leads;
                   spendMap.set(r.campaign_name, cur);
                 }
                 const fsRows = (formStatsQ.data?.rows ?? [])
@@ -976,15 +982,15 @@ const formDbStatsMap = useMemo(() => {
                   .filter(r => !search || r.campaign_name.toLowerCase().includes(search.toLowerCase()));
 
                 const totals = fsRows.reduce(
-                  (a, r) => ({ jami: a.jami + r.jami_lid, tasdiqlangan: a.tasdiqlangan + r.tasdiqlangan, sifatli: a.sifatli + r.sifatli, sifatsiz: a.sifatsiz + r.sifatsiz, bekor: a.bekor + r.bekor_boldi, sotuv: a.sotuv + r.sotuv_boldi, spend: a.spend + (spendMap.get(r.campaign_name)?.spend ?? 0) }),
-                  { jami: 0, tasdiqlangan: 0, sifatli: 0, sifatsiz: 0, bekor: 0, sotuv: 0, spend: 0 },
+                  (a, r) => ({ jami: a.jami + r.jami_lid, tasdiqlangan: a.tasdiqlangan + r.tasdiqlangan, saralangan: a.saralangan + (spendMap.get(r.campaign_name)?.leads ?? 0), sifatli: a.sifatli + r.sifatli, sifatsiz: a.sifatsiz + r.sifatsiz, bekor: a.bekor + r.bekor_boldi, sotuv: a.sotuv + r.sotuv_boldi, spend: a.spend + (spendMap.get(r.campaign_name)?.spend ?? 0) }),
+                  { jami: 0, tasdiqlangan: 0, saralangan: 0, sifatli: 0, sifatsiz: 0, bekor: 0, sotuv: 0, spend: 0 },
                 );
 
                 return (
                   <table className="w-full text-[12.5px]">
                     <thead>
                       <tr className="bg-bg3 border-b border-border">
-                        {["#", "KAMPANIYA", "SARF", "JAMI LID", "TASDIQLANGAN", "SIFATLI", "SIFATSIZ", "BEKOR", "SOTUV", "SIFAT %"].map(h => (
+                        {["#", "KAMPANIYA", "SARF", "JAMI LID", "TASDIQLANGAN", "SARALANGAN", "SIFATLI", "SIFATSIZ", "BEKOR", "SOTUV", "SIFAT %"].map(h => (
                           <th key={h} className="px-4 py-2.5 text-left text-[10px] font-bold text-text3 tracking-wider">{h}</th>
                         ))}
                       </tr>
@@ -993,13 +999,13 @@ const formDbStatsMap = useMemo(() => {
                       {(campaignsQ.isLoading || formStatsQ.isLoading) ? (
                         Array.from({ length: 5 }).map((_, i) => (
                           <tr key={i} className="border-b border-border">
-                            {Array.from({ length: 10 }).map((__, j) => (
+                            {Array.from({ length: 11 }).map((__, j) => (
                               <td key={j} className="px-4 py-3"><Skeleton className="h-3.5 w-16" /></td>
                             ))}
                           </tr>
                         ))
                       ) : fsRows.length === 0 ? (
-                        <tr><td colSpan={10} className="px-4 py-10 text-center text-text3">Ma'lumot topilmadi</td></tr>
+                        <tr><td colSpan={11} className="px-4 py-10 text-center text-text3">Ma'lumot topilmadi</td></tr>
                       ) : fsRows.map((r, i) => {
                         const meta = spendMap.get(r.campaign_name);
                         const sifatPct = r.jami_lid > 0 ? Math.round((r.sifatli / r.jami_lid) * 100) : 0;
@@ -1016,6 +1022,7 @@ const formDbStatsMap = useMemo(() => {
                               <span className="font-semibold" style={{ color: tasdiqColor }}>{r.tasdiqlangan}</span>
                               <span className="text-text3 text-[10.5px]"> ({tasdiqPct}%)</span>
                             </td>
+                            <td className="px-4 py-3 font-semibold text-purple" title="Meta reklama-attribution soni (Ads Manager 'Natijalar')">{meta?.leads ?? 0}</td>
                             <td className="px-4 py-3 font-semibold text-green">{r.sifatli}</td>
                             <td className="px-4 py-3 text-red/80">{r.sifatsiz || "—"}</td>
                             <td className="px-4 py-3 text-amber">{r.bekor_boldi || "—"}</td>
@@ -1039,6 +1046,7 @@ const formDbStatsMap = useMemo(() => {
                           <td className="px-4 py-2.5 font-bold text-text">${Math.round(totals.spend)}</td>
                           <td className="px-4 py-2.5 font-bold text-blue">{totals.jami}</td>
                           <td className="px-4 py-2.5 font-bold text-text">{totals.tasdiqlangan}</td>
+                          <td className="px-4 py-2.5 font-bold text-purple">{totals.saralangan}</td>
                           <td className="px-4 py-2.5 font-bold text-green">{totals.sifatli}</td>
                           <td className="px-4 py-2.5 text-red/80">{totals.sifatsiz}</td>
                           <td className="px-4 py-2.5 text-amber">{totals.bekor}</td>
