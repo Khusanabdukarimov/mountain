@@ -102,6 +102,16 @@ Promise.all([
     startCallsAutoSync();
     console.log(`[bitrix-sync] Server running on port ${PORT}`);
 
+    // Daily lead reconcile (01:00 Tashkent) — refreshes UTM tags that Bitrix's
+    // native CRM-form connector populates after lead creation, so Kampaniyalar
+    // "Jami lid" isn't undercounted. Also runs once ~90s after startup.
+    try {
+      const { scheduleDailyReconcile } = require('./sync/reconcileLeads');
+      scheduleDailyReconcile();
+    } catch (e) {
+      console.error('[reconcile-leads] failed to schedule:', e.message);
+    }
+
     // Check Meta access token expiry on startup
     (async () => {
       try {
