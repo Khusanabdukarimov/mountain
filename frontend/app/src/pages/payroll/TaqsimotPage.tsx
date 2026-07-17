@@ -63,7 +63,12 @@ export default function TaqsimotPage() {
     refetchInterval: 60_000,
   });
 
-  const rows  = data?.responsibles ?? [];
+  // Only sales roles participate in lead distribution — show Hunter / Closer
+  // (and Hunter + Closer) only; hide support/PM/office staff (09:00–18:00, PM, etc.).
+  const rows = (data?.responsibles ?? []).filter((r) => {
+    const pos = (r.work_position ?? "").toLowerCase();
+    return pos.includes("hunter") || pos.includes("closer");
+  });
   const total = rows.reduce((s, r) => s + parseFloat(String(r.taqsimot_pct ?? 0)), 0);
   const totalRounded = Math.round(total * 10) / 10;
 
