@@ -613,6 +613,17 @@ const formDbStatsMap = useMemo(() => {
     return m;
   }, [formAdsetsMap, creativesQ.data, allRows]);
 
+  // Hide forms with no activity in the selected period (0 leads AND $0 spend AND
+  // 0 clicks) — a date filter should only surface forms that actually ran/produced
+  // leads that period, not every ACTIVE form the account has ever created.
+  const visibleForms = useMemo(() => uniqueForms.filter(form => {
+    const db    = formDbStatsMap.get(form.form_id);
+    const leads = formLeadsMap.get(form.form_id)?.leads ?? db?.leads ?? 0;
+    const spend = db?.spend  ?? 0;
+    const clicks= db?.clicks ?? 0;
+    return leads > 0 || spend > 0 || clicks > 0;
+  }), [uniqueForms, formDbStatsMap, formLeadsMap]);
+
   // ── Top KPI cards (Jami Lidlar / Sifatli Lidlar / Sotuv) ───────────────────
   // Sourced from /api/campaigns/creatives, which cross-references facebook_leads
   // (Meta raw submissions, with phone numbers) against Bitrix24 leads/deals via
@@ -917,11 +928,11 @@ const formDbStatsMap = useMemo(() => {
                             ))}
                           </tr>
                         ))
-                      ) : uniqueForms.length === 0 ? (
+                      ) : visibleForms.length === 0 ? (
                         <tr><td colSpan={8} className="px-4 py-10 text-center text-text3">
                           Faol formalar topilmadi
                         </td></tr>
-                      ) : uniqueForms.map(form => {
+                      ) : visibleForms.map(form => {
                           const isExp = expandedForm === form.form_id;
                           const fCamps = (formsQ.data?.campaigns ?? []).filter(c =>
                             c.forms.some(f => f.form_id === form.form_id),
