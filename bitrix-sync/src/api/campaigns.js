@@ -419,6 +419,11 @@ router.get('/form-stats', async (req, res) => {
       LEFT JOIN sotuv_by_campaign sc ON sc.campaign_name = fl.campaign_name
       LEFT JOIN bitrix_utm bu ON bu.campaign_name = fl.campaign_name
       WHERE fl.campaign_name IS NOT NULL
+        -- Drop junk/bot form submissions ("2","767","08555"...) so sifatli /
+        -- sifatsiz / bekor stay consistent with jami_lid (which already requires
+        -- a valid phone). Without this, a spam wave inflates sifatsiz above
+        -- jami_lid (15.07 Mountain 13.07: sifatsiz 28 vs jami_lid 12).
+        AND LENGTH(REGEXP_REPLACE(fl.phone,'[^0-9]','','g')) >= 9
         ${from ? `AND (fl.created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date >= $1::date` : ''}
         ${to   ? `AND (fl.created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date <= ${ from ? '$2' : '$1' }::date` : ''}
         ${formFilterClause}
