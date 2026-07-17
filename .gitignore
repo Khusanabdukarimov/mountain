@@ -38,3 +38,8 @@ backend/data/
 *.swp
 bitrix-sync/.env
 backend/.env
+
+# ── Lead / deal exports (contain customer PII — never commit) ─
+*.csv
+*.xlsx
+!bitrix-sync/scripts/*.csv

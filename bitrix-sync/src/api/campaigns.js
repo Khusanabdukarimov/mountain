@@ -356,17 +356,24 @@ router.get('/form-stats', async (req, res) => {
         GROUP BY campaign_name
       ),
       -- Jami lid = Bitrix24 leads carrying this campaign's UTM, NOT raw webhook
-      -- submissions. Our webhook writes UTM_CAMPAIGN when it creates the lead,
-      -- while spam/bot entries arrive via Bitrix's native CRM-form connector
-      -- without UTM — so counting UTM'd Bitrix leads naturally excludes spam
-      -- and closely tracks Meta's ad-attributed "Natijalar".
+      -- submissions. Our webhook writes UTM_CAMPAIGN when it creates the lead.
+      -- We ALSO require a valid (>=9-digit) phone: spam/bot waves submit the
+      -- lead form with junk phones ("2","767","08555"...) and DO get a UTM from
+      -- our webhook, so the old "no-UTM => spam" assumption missed them and
+      -- inflated jami_lid (15.07: 84 raw vs 59 real). A real person always
+      -- leaves a >=9-digit phone; this tracks Meta's ad-attributed "Natijalar".
       bitrix_utm AS (
-        SELECT utm_campaign AS campaign_name, COUNT(*)::int AS cnt
-        FROM leads
-        WHERE utm_campaign IS NOT NULL AND utm_campaign != ''
-          AND source_id = 'UC_89FPH6'
-          ${from ? `AND (date_create AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date >= $1::date` : ''}
-          ${to   ? `AND (date_create AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date <= ${ from ? '$2' : '$1' }::date` : ''}
+        SELECT l.utm_campaign AS campaign_name, COUNT(*)::int AS cnt
+        FROM leads l
+        WHERE l.utm_campaign IS NOT NULL AND l.utm_campaign != ''
+          AND l.source_id = 'UC_89FPH6'
+          AND EXISTS (
+            SELECT 1 FROM lead_phones lp
+            WHERE lp.lead_id = l.id
+              AND LENGTH(REGEXP_REPLACE(lp.phone,'[^0-9]','','g')) >= 9
+          )
+          ${from ? `AND (l.date_create AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date >= $1::date` : ''}
+          ${to   ? `AND (l.date_create AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date <= ${ from ? '$2' : '$1' }::date` : ''}
         GROUP BY 1
       ),
       -- Latest-card-wins, computed ONCE per normalized phone (not a correlated
