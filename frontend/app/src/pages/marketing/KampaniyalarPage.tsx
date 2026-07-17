@@ -177,11 +177,11 @@ function SotuvDealsPanel({ adsetName, month, year, from, to, sotuvFrom, sotuvTo 
 }
 
 // ── Lead sub-table ─────────────────────────────────────────────────────────────
-function LeadsSubTable({ formId, campaignId, from, to }: { formId: string; campaignId: string; from: string; to: string }) {
+function LeadsSubTable({ formId, campaignId, from, to, campaignName }: { formId: string; campaignId: string; from: string; to: string; campaignName?: string }) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const q = useQuery({
-    queryKey: ["form-leads", formId, campaignId, from, to],
-    queryFn: () => getFormLeads(formId, campaignId, from, to),
+    queryKey: ["form-leads", formId, campaignId, from, to, campaignName],
+    queryFn: () => getFormLeads(formId, campaignId, from, to, campaignName),
     staleTime: 5 * 60_000,
   });
   if (q.isLoading) return <div className="px-5 py-3 text-[11px] text-text3 italic">Yuklanmoqda…</div>;
@@ -191,13 +191,13 @@ function LeadsSubTable({ formId, campaignId, from, to }: { formId: string; campa
       <table className="w-full text-[11px]">
         <thead>
           <tr className="text-text3 border-b border-border/20">
-            {["Lid nomi", "Telefon", "Bosqich", "Sana", "Bitrix24"].map(h => (
+            {["#", "Lid nomi", "Telefon", "Bosqich", "Sana", "Bitrix24"].map(h => (
               <th key={h} className="text-left px-4 py-1.5 font-medium">{h}</th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {q.data.leads.map(l => {
+          {q.data.leads.map((l, idx) => {
             const isOpen = expandedId === l.id;
             const fieldEntries = Object.entries(l.field_data || {});
             const stageColor = l.stage_code ? (STAGE_COLOR[l.stage_code] ?? "#94a3b8") : "#64748b";
@@ -208,6 +208,7 @@ function LeadsSubTable({ formId, campaignId, from, to }: { formId: string; campa
                   onClick={() => setExpandedId(isOpen ? null : l.id)}
                   className="border-b border-border/10 hover:bg-bg3/50 cursor-pointer select-none"
                 >
+                  <td className="px-4 py-2 text-text3 font-mono text-[10.5px]">{String(idx + 1).padStart(2, "0")}</td>
                   <td className="px-4 py-2 text-text font-medium">{l.name || "—"}</td>
                   <td className="px-4 py-2 text-text2 font-mono">{l.phone || "—"}</td>
                   <td className="px-4 py-2">
@@ -239,7 +240,7 @@ function LeadsSubTable({ formId, campaignId, from, to }: { formId: string; campa
                 </tr>
                 {isOpen && (
                   <tr key={`${l.id}-detail`} className="bg-bg3/30 border-b border-border/20">
-                    <td colSpan={5} className="px-6 py-3">
+                    <td colSpan={6} className="px-6 py-3">
                       {fieldEntries.length === 0 ? (
                         <span className="text-text3 italic">Ma'lumot yo'q</span>
                       ) : (
@@ -306,6 +307,7 @@ export default function KampaniyalarPage() {
   const [search, setSearch]         = useState("");
   const [expandedForm, setExpandedForm]   = useState<string | null>(null);
   const [expandedCamp, setExpandedCamp]   = useState<string | null>(null);
+  const [expandedCampRow, setExpandedCampRow] = useState<string | null>(null); // Kampaniyalar tab row → leads drill-down
   const [refreshing, setRefreshing]       = useState(false);
   const [filterTargetologs, setFilterTargetologs] = useState<string[]>([]);
   const [filterCampaigns, setFilterCampaigns] = useState<string[]>([]);
@@ -1039,26 +1041,40 @@ const formDbStatsMap = useMemo(() => {
                         const meta = spendMap.get(r.campaign_name);
                         const sifatPct = r.jami_lid > 0 ? Math.round((r.sifatli / r.jami_lid) * 100) : 0;
                         const sifatColor = sifatPct >= 50 ? "#22c55e" : sifatPct >= 30 ? "#f59e0b" : "#ef4444";
+                        const isExp = expandedCampRow === r.campaign_name;
                         return (
-                          <tr key={r.campaign_name} className="border-b border-border hover:bg-bg3/50">
-                            <td className="px-4 py-3 text-text3 font-mono text-[11px]">{String(i + 1).padStart(2, "0")}</td>
-                            <td className="px-4 py-3 font-medium text-text max-w-[220px] truncate" title={r.campaign_name}>{r.campaign_name}</td>
-                            <td className="px-4 py-3 font-semibold text-text">{meta ? `$${Math.round(meta.spend)}` : "—"}</td>
-                            <td className="px-4 py-3 font-bold text-blue">{r.jami_lid}</td>
-                            <td className="px-4 py-3 font-semibold text-purple" title="Meta reklama-attribution soni (Ads Manager 'Natijalar')">{meta?.leads ?? 0}</td>
-                            <td className="px-4 py-3 font-semibold text-green">{r.sifatli}</td>
-                            <td className="px-4 py-3 text-red/80">{r.sifatsiz || "—"}</td>
-                            <td className="px-4 py-3 text-amber">{r.bekor_boldi || "—"}</td>
-                            <td className="px-4 py-3 font-bold" style={{ color: r.sotuv_boldi > 0 ? "#22c55e" : "var(--text3)" }}>{r.sotuv_boldi || "—"}</td>
-                            <td className="px-4 py-3">
-                              <div className="flex items-center gap-1.5">
-                                <div className="w-12 h-1.5 rounded-full bg-white/10 overflow-hidden">
-                                  <div className="h-full rounded-full" style={{ width: `${sifatPct}%`, background: sifatColor }} />
+                          <>
+                            <tr
+                              key={r.campaign_name}
+                              onClick={() => setExpandedCampRow(isExp ? null : r.campaign_name)}
+                              className={`border-b border-border hover:bg-bg3/50 cursor-pointer select-none ${isExp ? "bg-bg3/30" : ""}`}
+                            >
+                              <td className="px-4 py-3 text-text3 font-mono text-[11px]">{String(i + 1).padStart(2, "0")}</td>
+                              <td className="px-4 py-3 font-medium text-text max-w-[220px] truncate" title={r.campaign_name}>{r.campaign_name}</td>
+                              <td className="px-4 py-3 font-semibold text-text">{meta ? `$${Math.round(meta.spend)}` : "—"}</td>
+                              <td className="px-4 py-3 font-bold text-blue">{r.jami_lid}</td>
+                              <td className="px-4 py-3 font-semibold text-purple" title="Meta reklama-attribution soni (Ads Manager 'Natijalar')">{meta?.leads ?? 0}</td>
+                              <td className="px-4 py-3 font-semibold text-green">{r.sifatli}</td>
+                              <td className="px-4 py-3 text-red/80">{r.sifatsiz || "—"}</td>
+                              <td className="px-4 py-3 text-amber">{r.bekor_boldi || "—"}</td>
+                              <td className="px-4 py-3 font-bold" style={{ color: r.sotuv_boldi > 0 ? "#22c55e" : "var(--text3)" }}>{r.sotuv_boldi || "—"}</td>
+                              <td className="px-4 py-3">
+                                <div className="flex items-center gap-1.5">
+                                  <div className="w-12 h-1.5 rounded-full bg-white/10 overflow-hidden">
+                                    <div className="h-full rounded-full" style={{ width: `${sifatPct}%`, background: sifatColor }} />
+                                  </div>
+                                  <span className="text-[11px] font-semibold" style={{ color: sifatColor }}>{sifatPct}%</span>
                                 </div>
-                                <span className="text-[11px] font-semibold" style={{ color: sifatColor }}>{sifatPct}%</span>
-                              </div>
-                            </td>
-                          </tr>
+                              </td>
+                            </tr>
+                            {isExp && (
+                              <tr key={`${r.campaign_name}-leads`}>
+                                <td colSpan={10} className="p-0">
+                                  <LeadsSubTable formId="" campaignId="" campaignName={r.campaign_name} from={fromDate} to={toDate} />
+                                </td>
+                              </tr>
+                            )}
+                          </>
                         );
                       })}
                     </tbody>

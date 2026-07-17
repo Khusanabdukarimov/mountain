@@ -1010,9 +1010,10 @@ router.post('/sync-creatives', async (_req, res) => {
 });
 
 // GET /api/campaigns/leads?form_id=123&campaign_id=456&from=2026-05-01&to=2026-05-31
+// Either form_id or campaign_name is required (campaign_name → per-campaign drill-down).
 router.get('/leads', async (req, res) => {
-  const { form_id, campaign_id, from, to } = req.query;
-  if (!form_id) return res.status(400).json({ error: 'form_id is required' });
+  const { form_id, campaign_id, campaign_name, from, to } = req.query;
+  if (!form_id && !campaign_name) return res.status(400).json({ error: 'form_id or campaign_name is required' });
 
   try {
     const { rows } = await pool.query(`
@@ -1029,13 +1030,14 @@ router.get('/leads', async (req, res) => {
          = RIGHT(REGEXP_REPLACE(fl.phone,  '[^0-9]', '', 'g'), 9)
       LEFT JOIN leads  l ON l.id = lp.lead_id
       LEFT JOIN stages s ON s.id = l.stage_id
-      WHERE fl.form_id = $1
+      WHERE ($1::text IS NULL OR fl.form_id = $1)
         AND ($2::text IS NULL OR fl.campaign_id = $2)
+        AND ($5::text IS NULL OR fl.campaign_name = $5)
         AND ($3::date IS NULL OR (fl.created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date >= $3::date)
         AND ($4::date IS NULL OR (fl.created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date <= $4::date)
       ORDER BY fl.created_time DESC, l.id DESC
       LIMIT 1000
-    `, [form_id, campaign_id || null, from || null, to || null]);
+    `, [form_id || null, campaign_id || null, from || null, to || null, campaign_name || null]);
 
     // Deduplicate by fl.id (multiple lead_phones rows may join to same facebook_lead)
     const seen = new Map();

@@ -301,10 +301,11 @@ export function getPageForms(month?: string, year?: number, from?: string, to?: 
   });
 }
 
-export function getFormLeads(formId: string, campaignId?: string, from?: string, to?: string) {
+export function getFormLeads(formId: string, campaignId?: string, from?: string, to?: string, campaignName?: string) {
   return apiGet<{ count: number; leads: FormLead[] }>('/api/campaigns/leads', {
-    form_id: formId,
+    ...(formId ? { form_id: formId } : {}),
     ...(campaignId ? { campaign_id: campaignId } : {}),
+    ...(campaignName ? { campaign_name: campaignName } : {}),
     ...(from ? { from } : {}),
     ...(to   ? { to }   : {}),
   });
