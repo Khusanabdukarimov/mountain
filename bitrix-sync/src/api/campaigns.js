@@ -354,10 +354,25 @@ router.get('/form-stats', async (req, res) => {
         SELECT campaign_name, SUM(cnt)::int AS sotuv_boldi
         FROM real_sotuv
         GROUP BY campaign_name
+      ),
+      -- Jami lid = Bitrix24 leads carrying this campaign's UTM, NOT raw webhook
+      -- submissions. Our webhook writes UTM_CAMPAIGN when it creates the lead,
+      -- while spam/bot entries arrive via Bitrix's native CRM-form connector
+      -- without UTM — so counting UTM'd Bitrix leads naturally excludes spam
+      -- and closely tracks Meta's ad-attributed "Natijalar".
+      bitrix_utm AS (
+        SELECT utm_campaign AS campaign_name, COUNT(*)::int AS cnt
+        FROM leads
+        WHERE utm_campaign IS NOT NULL AND utm_campaign != ''
+          AND source_id = 'UC_89FPH6'
+          ${from ? `AND (date_create AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date >= $1::date` : ''}
+          ${to   ? `AND (date_create AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date <= ${ from ? '$2' : '$1' }::date` : ''}
+        GROUP BY 1
       )
       SELECT
         fl.campaign_name,
-        COUNT(DISTINCT fl.id)::int                                                                                                 AS jami_lid,
+        COALESCE(MAX(bu.cnt), 0)::int                                                                                              AS jami_lid,
+        COUNT(DISTINCT fl.id)::int                                                                                                 AS webhook_lid,
         -- "Tasdiqlangan" = real phone number (>=9 digits after stripping non-digits).
         -- Filters out spam/bot submissions ("1", "Ttff", etc.) that inflate jami_lid
         -- but were never real people — see spam wave found in Mountain 13.07 / patent
@@ -378,6 +393,7 @@ router.get('/form-stats', async (req, res) => {
       LEFT JOIN deals d   ON d.id  = dp.deal_id AND d.lead_id IS NULL
       LEFT JOIN stages ds ON ds.id = d.stage_id
       LEFT JOIN sotuv_by_campaign sc ON sc.campaign_name = fl.campaign_name
+      LEFT JOIN bitrix_utm bu ON bu.campaign_name = fl.campaign_name
       WHERE fl.campaign_name IS NOT NULL
         ${from ? `AND (fl.created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date >= $1::date` : ''}
         ${to   ? `AND (fl.created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date <= ${ from ? '$2' : '$1' }::date` : ''}
