@@ -116,7 +116,7 @@ export default function TaqsimotPage() {
                   Xodim
                 </th>
                 <th className="text-left px-4 py-2.5 font-medium text-text3 uppercase tracking-wider text-[10.5px]">
-                  Ish vaqti
+                  Rol
                 </th>
                 <th className="text-left px-4 py-2.5 font-medium text-text3 uppercase tracking-wider text-[10.5px] w-36">
                   Taqsimot %
@@ -303,7 +303,7 @@ function TaqsimotRow({
     ? parseFloat(String(row.taqsimot_pct))
     : null;
   const hasVal = pct !== null && pct > 0;
-  const schedule = row.work_position ?? "09:00–18:00";
+  const role = row.work_position ?? "—";
 
   return (
     <tr className={`border-b border-border transition-colors ${flash ? "bg-green-500/10" : "hover:bg-bg3/50"}`}>
@@ -318,9 +318,9 @@ function TaqsimotRow({
         </div>
       </td>
 
-      {/* ISH VAQTI */}
+      {/* ROL */}
       <td className="px-4 py-3">
-        <span className="mono text-text2 text-[11px]">{schedule}</span>
+        <span className="mono text-text2 text-[11px]">{role}</span>
       </td>
 
       {/* TAQSIMOT % */}
