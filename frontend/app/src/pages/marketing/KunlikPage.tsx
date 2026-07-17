@@ -264,88 +264,69 @@ export default function KunlikPage() {
   ];
   const visibleSections = allSections.filter(s => active === "all" || s.key === active);
 
-  const jamiData = useMemo(() => {
-    const keys = Object.keys(autoData);
-    const sum = (field: string) =>
-      Array.from({ length: days }, (_, i) =>
-        keys.reduce((s, k) => s + ((autoData[k] as Record<string, number[]>)[field]?.[i] ?? 0), 0)
-      );
-    return {
-      budget:      sum('budget'),
-      leads:       sum('leads'),
-      qual_leads:  sum('qual_leads'),
-      meetings:    sum('meetings'),
-      deals:       sum('deals'),
-      deals_sum:   sum('deals_sum'),
-      sales_count: sum('sales_count'),
-      sales_sum:   sum('sales_sum'),
-      cancelled:   sum('cancelled'),
-    };
-  }, [autoData, days]);
-
-
+  // Jami = sum of every section tab's EFFECTIVE cell — API/CRM auto data plus
+  // manual overrides. Only Target arrives from the API; other sections'
+  // numbers (e.g. Instagram/Networking budgets) are typed in by hand, so
+  // summing raw autoData would silently drop everything entered manually.
   function jamiCellValue(metric: MetricDef, i: number): number {
-    const b = jamiData;
+    const sectionKeys = allSections.filter(s => s.key !== "jami").map(s => s.key);
+    const sumField = (key: MetricKey): number =>
+      sectionKeys.reduce(
+        (sum, src) => sum + cellValue(src, { key, label: "", format: "num" } as MetricDef, i),
+        0,
+      );
     switch (metric.key) {
-      case "budget":      return b.budget[i];
-      case "leads":       return b.leads[i];
-      case "qual_leads":  return b.qual_leads[i];
-      case "meetings":    return b.meetings[i];
-      case "deals":       return b.deals[i];
-      case "deals_sum":   return b.deals_sum[i];
-      case "sales_count": return b.sales_count[i];
-      case "sales_sum":   return b.sales_sum[i];
-      case "cancelled":   return b.cancelled[i];
-      case "tolangan":    return 0;
-      case "roas":
-        return b.budget[i] > 0 ? (b.sales_sum[i] / b.budget[i]) * 100 : 0;
-      case "qual_lead_cost":
-        return b.qual_leads[i] > 0 ? b.budget[i] / b.qual_leads[i] : 0;
-      case "qual_conversion":
-        return b.leads[i] > 0 ? (b.qual_leads[i] / b.leads[i]) * 100 : 0;
-      case "customer_cost":
-        return b.sales_count[i] > 0 ? b.budget[i] / b.sales_count[i] : 0;
-    }
-    return 0;
-  }
-
-  function jamiFaktTotal(metric: MetricDef): number {
-    const b  = jamiData;
-    const js = qJamiStats.data;
-    // Use true overall DB totals for absolute count/sum metrics
-    if (js) {
-      switch (metric.key) {
-        case "leads":       return js.total_leads;
-        case "qual_leads":  return js.qual_leads;
-        case "cancelled":   return js.cancelled;
-        case "deals":       return js.total_deals;
-        case "deals_sum":   return js.deals_sum;
-        case "sales_count": return js.total_sales;
-        case "sales_sum":   return js.sales_sum ?? js.total_paid;
-        case "tolangan":    return js.total_paid;
-      }
-    }
-    const bg = b.budget.reduce((a,v)=>a+v,0);
-    switch (metric.key) {
+      case "tolangan": return 0;
       case "roas": {
-        const s = js ? js.sales_sum : b.sales_sum.reduce((a,v)=>a+v,0);
+        const bg = sumField("budget"), s = sumField("sales_sum");
         return bg > 0 ? (s / bg) * 100 : 0;
       }
       case "qual_lead_cost": {
-        const q = js ? js.qual_leads : b.qual_leads.reduce((a,v)=>a+v,0);
+        const bg = sumField("budget"), q = sumField("qual_leads");
         return q > 0 ? bg / q : 0;
       }
       case "qual_conversion": {
-        const l = js ? js.total_leads : b.leads.reduce((a,v)=>a+v,0);
-        const q = js ? js.qual_leads  : b.qual_leads.reduce((a,v)=>a+v,0);
+        const l = sumField("leads"), q = sumField("qual_leads");
         return l > 0 ? (q / l) * 100 : 0;
       }
       case "customer_cost": {
-        const sc = js ? js.total_sales : b.sales_count.reduce((a,v)=>a+v,0);
+        const bg = sumField("budget"), sc = sumField("sales_count");
         return sc > 0 ? bg / sc : 0;
       }
       default:
-        return Array.from({length: days}, (_, i) => jamiCellValue(metric, i)).reduce((a,v)=>a+v,0);
+        return sumField(metric.key);
+    }
+  }
+
+  function jamiFaktTotal(metric: MetricDef): number {
+    const js = qJamiStats.data;
+    // To'langan has no daily basis — keep the overall DB total.
+    if (metric.key === "tolangan") return js ? js.total_paid : 0;
+    // Everything else: FAKT = sum of the Jami daily cells, so the total always
+    // matches the row (API data + manual entries), like every other tab.
+    const sumDays = (key: MetricKey): number =>
+      Array.from({ length: days }, (_, i) =>
+        jamiCellValue({ key, label: "", format: "num" } as MetricDef, i)
+      ).reduce((a, v) => a + v, 0);
+    switch (metric.key) {
+      case "roas": {
+        const bg = sumDays("budget"), s = sumDays("sales_sum");
+        return bg > 0 ? (s / bg) * 100 : 0;
+      }
+      case "qual_lead_cost": {
+        const bg = sumDays("budget"), q = sumDays("qual_leads");
+        return q > 0 ? bg / q : 0;
+      }
+      case "qual_conversion": {
+        const l = sumDays("leads"), q = sumDays("qual_leads");
+        return l > 0 ? (q / l) * 100 : 0;
+      }
+      case "customer_cost": {
+        const bg = sumDays("budget"), sc = sumDays("sales_count");
+        return sc > 0 ? bg / sc : 0;
+      }
+      default:
+        return sumDays(metric.key);
     }
   }
   const isLoading = (qMeta.isLoading && !qMeta.data) || (qCrm.isLoading && !qCrm.data);
