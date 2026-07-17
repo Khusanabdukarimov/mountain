@@ -92,6 +92,54 @@ async function createBitrixLead(leadgenId, raw, fields) {
     || fields['ismingiz:'] || fields['ismingiz?'] || fields['ismingiz'] || 'Facebook Lead';
   const email = fields.email || null;
 
+  // Bitrix24's native CRM-form connector may have already created a lead for
+  // this same submission — but it writes NO UTM fields, which breaks the
+  // UTM-based campaign attribution (Kampaniyalar "Jami lid"). If a recent
+  // UTM-less Target lead with this phone exists in the mirror, patch its UTMs
+  // instead of creating a duplicate.
+  if (phone) {
+    try {
+      const last9 = String(phone).replace(/[^0-9]/g, '').slice(-9);
+      if (last9) {
+        const { rows: existingUtmless } = await pool.query(`
+          SELECT l.id FROM leads l
+          JOIN lead_phones lp ON lp.lead_id = l.id
+          WHERE RIGHT(REGEXP_REPLACE(lp.phone, '[^0-9]', '', 'g'), 9) = $1
+            AND l.source_id = $2
+            AND (l.utm_campaign IS NULL OR l.utm_campaign = '')
+            AND l.date_create > NOW() - INTERVAL '48 hours'
+          ORDER BY l.date_create DESC LIMIT 1
+        `, [last9, SOURCE_TARGET]);
+        if (existingUtmless.length > 0) {
+          const existingId = existingUtmless[0].id;
+          const utmFields = {
+            UTM_SOURCE:   utmSource,
+            UTM_MEDIUM:   utmMedium,
+            UTM_CAMPAIGN: raw.campaign_name || '',
+            UTM_CONTENT:  raw.adset_name   || '',
+            UTM_TERM:     raw.ad_name      || '',
+          };
+          const updRes = await bitrixPost('crm.lead.update', { id: existingId, fields: utmFields });
+          if (updRes && updRes.result) {
+            await pool.query(
+              `UPDATE leads SET utm_source=$2, utm_medium=$3, utm_campaign=$4, utm_content=$5, utm_term=$6 WHERE id=$1`,
+              [existingId, utmFields.UTM_SOURCE, utmFields.UTM_MEDIUM, utmFields.UTM_CAMPAIGN, utmFields.UTM_CONTENT, utmFields.UTM_TERM]
+            );
+            await pool.query(
+              'UPDATE facebook_leads SET bitrix_lead_id = $1 WHERE id = $2',
+              [existingId, String(leadgenId)]
+            );
+            console.log(`[facebook] UTM patched onto existing lead #${existingId} (native-connector created) for FB lead ${leadgenId}`);
+            return;
+          }
+        }
+      }
+    } catch (utmErr) {
+      console.error(`[facebook] UTM-patch check failed for ${leadgenId}:`, utmErr.message);
+      // fall through to normal create
+    }
+  }
+
   const bxFields = {
     NAME:         name,
     STATUS_ID:    'NEW',           // Yangi lid bosqichi
