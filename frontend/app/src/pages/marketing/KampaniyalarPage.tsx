@@ -300,8 +300,6 @@ const KAMP_PRESETS = [
 export default function KampaniyalarPage() {
   const [fromDate, setFromDate]     = useState(getFirstOfMonth);
   const [toDate,   setToDate]       = useState(getTodayIso);
-  const [sotuvFrom, setSotuvFrom]   = useState("");
-  const [sotuvTo,   setSotuvTo]     = useState("");
   const [filterOpen, setFilterOpen] = useState(false);
   const [tab, setTab]               = useState<Tab>("formalar");
   const [search, setSearch]         = useState("");
@@ -329,7 +327,7 @@ export default function KampaniyalarPage() {
   const formsQ           = useQuery({ queryKey: ["campaign-forms",  month, year, fromDate, toDate], queryFn: () => getCampaignForms(month, year, fromDate, toDate),                    staleTime: 30_000, refetchInterval: AUTO_REFRESH });
   const pageFormsQ       = useQuery({ queryKey: ["page-forms", month, year, fromDate, toDate], queryFn: () => getPageForms(month, year, fromDate, toDate), staleTime: 30_000, refetchInterval: AUTO_REFRESH });
   const kunlikQ          = useQuery({ queryKey: ["kunlik-hisobot",  month, year],                   queryFn: () => getKunlikHisobot(month, year),                                      staleTime: 60_000, refetchInterval: AUTO_REFRESH });
-  const creativesQ       = useQuery({ queryKey: ["creatives",       month, year, fromDate, toDate, sotuvFrom, sotuvTo], queryFn: () => getCampaignCreatives(month, year, fromDate, toDate, sotuvFrom || undefined, sotuvTo || undefined), staleTime: 30_000, refetchInterval: AUTO_REFRESH });
+  const creativesQ       = useQuery({ queryKey: ["creatives",       month, year, fromDate, toDate], queryFn: () => getCampaignCreatives(month, year, fromDate, toDate), staleTime: 30_000, refetchInterval: AUTO_REFRESH });
   const activeCampNamesQ  = useQuery({ queryKey: ["active-campaign-names"],                          queryFn: getActiveCampaignNames,                                                   staleTime: 5 * 60_000 });
 
   // Resolve the selected Forma name(s) to form_id(s) so the Kampaniyalar tab's
@@ -709,7 +707,7 @@ const formDbStatsMap = useMemo(() => {
       {/* ── Filter panel ─────────────────────────────────────────────────────── */}
       {(() => {
         const hasExtra = !!(filterTargetologs.length || filterCampaigns.length || filterPlatforms.length || filterForm.length || filterAdsets.length || filterCreatives.length);
-        const clearAll = () => { setFilterTargetologs([]); setFilterCampaigns([]); setFilterPlatforms([]); setFilterForm([]); setFilterAdsets([]); setFilterCreatives([]); setSotuvFrom(""); setSotuvTo(""); setFromDate(getFirstOfMonth()); setToDate(getTodayIso()); };
+        const clearAll = () => { setFilterTargetologs([]); setFilterCampaigns([]); setFilterPlatforms([]); setFilterForm([]); setFilterAdsets([]); setFilterCreatives([]); setFromDate(getFirstOfMonth()); setToDate(getTodayIso()); };
         return (
           <div style={{ background: "var(--bg2)", borderBottom: "1px solid var(--border)", overflow: filterOpen ? "visible" : "hidden", position: "sticky", top: 0, zIndex: 10 }}>
             <div style={{ padding: "10px 20px", display: "flex", alignItems: "center", gap: 10, cursor: "pointer" }}
@@ -751,25 +749,6 @@ const formDbStatsMap = useMemo(() => {
                       );
                     })}
                   </div>
-                </div>
-
-                {/* Sotuv date range — optional, decoupled from lead dates */}
-                <div style={{ marginBottom: 14 }}>
-                  <div style={{ fontSize: 11, color: "var(--text3)", marginBottom: 6, display: "flex", alignItems: "center", gap: 6 }}>
-                    Sotuv sanasi (alohida)
-                    {(sotuvFrom || sotuvTo) && (
-                      <button onClick={() => { setSotuvFrom(""); setSotuvTo(""); }}
-                        style={{ fontSize: 10, color: "var(--text3)", background: "none", border: "none", cursor: "pointer", textDecoration: "underline" }}>
-                        tozala
-                      </button>
-                    )}
-                  </div>
-                  <DateRangePicker
-                    start={sotuvFrom || undefined} end={sotuvTo || undefined}
-                    onChange={(s, e) => { setSotuvFrom(s); setSotuvTo(e); }}
-                    onClear={() => { setSotuvFrom(""); setSotuvTo(""); }}
-                    placeholder="Sana tanlang (ixtiyoriy)"
-                  />
                 </div>
 
                 {/* Multi-select filters row 1 */}
@@ -1319,7 +1298,7 @@ const formDbStatsMap = useMemo(() => {
                                 <td className={TD}><SifatBar rate={r.sifat_rate} /></td>
                               </tr>
                               {isExpAd    && <CreativeLeadsPanel key={`panel-${adKey}`} adsetName={r.adset_name} month={month} year={year} from={fromDate} to={toDate} />}
-                              {isExpSotuv && <SotuvDealsPanel    key={`sotuv-${adKey}`} adsetName={r.adset_name} month={month} year={year} from={fromDate} to={toDate} sotuvFrom={sotuvFrom || undefined} sotuvTo={sotuvTo || undefined} />}
+                              {isExpSotuv && <SotuvDealsPanel    key={`sotuv-${adKey}`} adsetName={r.adset_name} month={month} year={year} from={fromDate} to={toDate} />}
                             </>
                           );
                         })}
