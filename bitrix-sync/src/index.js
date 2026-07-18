@@ -107,6 +107,21 @@ Promise.all([
     CREATE INDEX IF NOT EXISTS deal_phones_pnorm_idx ON deal_phones(phone_norm);
     CREATE INDEX IF NOT EXISTS fb_leads_pnorm_idx    ON facebook_leads(phone_norm);
   `).catch(err => console.error('[startup] phone_norm migration failed:', err.message)),
+  // Manual jami_lid / leads_count adjustments per form+day. Used to fold in
+  // leads Meta counts but we can't map to a Bitrix card (junk-phone spam that
+  // slipped Meta's own filter). Read by /form-stats (by campaign) and /forms
+  // (by form_id); delta is added to jami_lid / leads_count.
+  pool.query(`
+    CREATE TABLE IF NOT EXISTS lead_count_overrides (
+      id            SERIAL PRIMARY KEY,
+      form_id       TEXT,
+      campaign_name TEXT,
+      rep_date      DATE NOT NULL,
+      delta         INTEGER NOT NULL,
+      note          TEXT,
+      created_at    TIMESTAMPTZ DEFAULT NOW()
+    );
+  `).catch(err => console.error('[startup] lead_count_overrides migration failed:', err.message)),
   pool.query(`
     UPDATE stages SET is_won = TRUE, is_final = TRUE
       WHERE entity = 'deal' AND (

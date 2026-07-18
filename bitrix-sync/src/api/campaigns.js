@@ -376,6 +376,18 @@ router.get('/form-stats', async (req, res) => {
           ${to   ? `AND (l.date_create AT TIME ZONE 'Asia/Tashkent')::date <= ${ from ? '$2' : '$1' }::date` : ''}
         GROUP BY 1
       ),
+      -- Manual jami_lid adjustments per campaign+day (lead_count_overrides table).
+      -- Used to fold in leads Meta counts but we can't (junk-phone spam that
+      -- slipped Meta's own filter — unmappable to a Bitrix card). delta is added
+      -- to jami_lid so the dashboard can match Meta's "Natijalar" on request.
+      overrides AS (
+        SELECT campaign_name, SUM(delta)::int AS delta
+        FROM lead_count_overrides
+        WHERE TRUE
+          ${from ? `AND rep_date >= $1::date` : ''}
+          ${to   ? `AND rep_date <= ${ from ? '$2' : '$1' }::date` : ''}
+        GROUP BY 1
+      ),
       -- Latest-card-wins, computed ONCE per normalized phone (not a correlated
       -- LATERAL per fb-lead, which seq-scans and exhausts the pool). A returning
       -- contact's phone can match several Bitrix cards; only the newest counts.
@@ -397,7 +409,7 @@ router.get('/form-stats', async (req, res) => {
       )
       SELECT
         fl.campaign_name,
-        COALESCE(MAX(bu.cnt), 0)::int                                                                                              AS jami_lid,
+        (COALESCE(MAX(bu.cnt), 0) + COALESCE(MAX(ov.delta), 0))::int                                                               AS jami_lid,
         COUNT(DISTINCT fl.id)::int                                                                                                 AS webhook_lid,
         -- "Tasdiqlangan" = real phone number (>=9 digits after stripping non-digits).
         -- Filters out spam/bot submissions ("1", "Ttff", etc.) that inflate jami_lid
@@ -418,6 +430,7 @@ router.get('/form-stats', async (req, res) => {
       LEFT JOIN stages ds ON ds.id = dp.stage_id
       LEFT JOIN sotuv_by_campaign sc ON sc.campaign_name = fl.campaign_name
       LEFT JOIN bitrix_utm bu ON bu.campaign_name = fl.campaign_name
+      LEFT JOIN overrides  ov ON ov.campaign_name = fl.campaign_name
       WHERE fl.campaign_name IS NOT NULL
         -- Drop junk/bot form submissions ("2","767","08555"...) so sifatli /
         -- sifatsiz / bekor stay consistent with jami_lid (which already requires
@@ -813,6 +826,19 @@ router.get('/forms', async (req, res) => {
     const sifatliMap = {};
     for (const r of sifatliRows) sifatliMap[r.form_id] = r.sifatli_lid;
 
+    // ── 2d. Manual per-form lead-count adjustments (lead_count_overrides) ──
+    // Folds in leads Meta counts but we can't map to a Bitrix card (junk-phone
+    // spam that slipped Meta's own filter). delta is added to this form's
+    // leads_count so Faol formalar matches Meta's "Natijalar" on request.
+    const overrideMap = {};
+    try {
+      const { rows: ovRows } = await pool.query(
+        `SELECT form_id, SUM(delta)::int AS delta FROM lead_count_overrides
+         WHERE rep_date BETWEEN $1::date AND $2::date GROUP BY form_id`,
+        [since, until]);
+      for (const r of ovRows) overrideMap[r.form_id] = r.delta;
+    } catch (e) { /* table not migrated yet — skip */ }
+
     // ── 2. Enrich with Meta API form names/status (optional, skip if rate-limited) ──
     const formDetails = {};
     const allFormIds = [...new Set(dbRows.map(r => r.form_id))];
@@ -869,7 +895,7 @@ router.get('/forms', async (req, res) => {
           form_id:      fid,
           form_name:    fd.name || fid,
           status:       fd.status || 'ACTIVE',
-          leads_count:  info.month_leads,
+          leads_count:  info.month_leads + (overrideMap[fid] ?? 0),
           sifatli_lid:  sifatliMap[fid] ?? 0,
           created_time: fd.created_time || '',
           adset_id:     (info.adset_ids || [])[0] || '',
