@@ -1076,20 +1076,31 @@ router.get('/leads', async (req, res) => {
   if (!form_id && !campaign_name) return res.status(400).json({ error: 'form_id or campaign_name is required' });
 
   try {
+    // One row per facebook_lead: the Bitrix card is attached via LATERAL
+    // (newest phone-matched card wins, same rule as /form-stats). The old
+    // version joined lead_phones directly, which multiplied rows — junk/spam
+    // phones matched dozens of Bitrix entries, so LIMIT 1000 filled up with
+    // duplicates of the newest few leads and the drill-down showed ~26 of 373.
     const { rows } = await pool.query(`
       SELECT
         fl.id, fl.full_name, fl.phone, fl.email,
         fl.ad_name, fl.adset_name, fl.campaign_name,
         fl.created_time, fl.field_data, fl.platform, fl.is_organic,
-        l.id AS bitrix_lead_id,
-        s.name AS stage_name,
-        s.bitrix_id AS stage_code
+        b.bitrix_lead_id,
+        b.stage_name,
+        b.stage_code
       FROM facebook_leads fl
-      LEFT JOIN lead_phones lp
-        ON RIGHT(REGEXP_REPLACE(lp.phone, '[^0-9]', '', 'g'), 9)
-         = RIGHT(REGEXP_REPLACE(fl.phone,  '[^0-9]', '', 'g'), 9)
-      LEFT JOIN leads  l ON l.id = lp.lead_id
-      LEFT JOIN stages s ON s.id = l.stage_id
+      LEFT JOIN LATERAL (
+        SELECT l.id AS bitrix_lead_id, s.name AS stage_name, s.bitrix_id AS stage_code
+        FROM lead_phones lp
+        JOIN leads  l ON l.id = lp.lead_id
+        LEFT JOIN stages s ON s.id = l.stage_id
+        WHERE LENGTH(REGEXP_REPLACE(fl.phone, '[^0-9]', '', 'g')) >= 7
+          AND RIGHT(REGEXP_REPLACE(lp.phone, '[^0-9]', '', 'g'), 9)
+            = RIGHT(REGEXP_REPLACE(fl.phone,  '[^0-9]', '', 'g'), 9)
+        ORDER BY l.date_create DESC NULLS LAST, l.id DESC
+        LIMIT 1
+      ) b ON TRUE
       WHERE ($1::text IS NULL OR fl.form_id = $1)
         AND ($2::text IS NULL OR fl.campaign_id = $2)
         AND ($5::text IS NULL OR fl.campaign_name = $5)
@@ -1099,17 +1110,11 @@ router.get('/leads', async (req, res) => {
         AND LENGTH(REGEXP_REPLACE(fl.phone,'[^0-9]','','g')) >= 9
         AND ($3::date IS NULL OR (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date >= $3::date)
         AND ($4::date IS NULL OR (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date <= $4::date)
-      ORDER BY fl.created_time DESC, l.id DESC
+      ORDER BY fl.created_time DESC
       LIMIT 1000
     `, [form_id || null, campaign_id || null, from || null, to || null, campaign_name || null]);
 
-    // Deduplicate by fl.id (multiple lead_phones rows may join to same facebook_lead)
-    const seen = new Map();
-    for (const r of rows) {
-      if (!seen.has(r.id)) seen.set(r.id, r);
-    }
-
-    const leads = [...seen.values()].map(r => {
+    const leads = rows.map(r => {
       const platform = (r.platform || 'facebook').toLowerCase();
       const utm_source = platform === 'instagram' ? 'ig' : platform;
       const utm_medium = r.is_organic ? 'organic' : 'paid';
