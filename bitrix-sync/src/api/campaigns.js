@@ -293,8 +293,8 @@ router.get('/active-names', async (req, res) => {
         WHERE date >= $1 AND date <= $2 AND spend > 0
         UNION
         SELECT DISTINCT campaign_name FROM facebook_leads
-        WHERE (created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date >= $1
-          AND (created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date <= $2
+        WHERE (created_time AT TIME ZONE 'Asia/Tashkent')::date >= $1
+          AND (created_time AT TIME ZONE 'Asia/Tashkent')::date <= $2
           AND campaign_name IS NOT NULL
       ) t
       ORDER BY campaign_name
@@ -308,7 +308,7 @@ router.get('/active-names', async (req, res) => {
 
 // Reporting-day rule: everywhere facebook_leads are bucketed by day, the day
 // boundary is Tashkent 03:00, not midnight — expressed in SQL as
-// `(created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date`.
+// `(created_time AT TIME ZONE 'Asia/Tashkent')::date`.
 // A submission at 01:41 belongs to the previous evening's ad activity, which
 // is also how Meta attributes it, so late-night leads no longer drift to the
 // next day. Must stay consistent with backend/app/main.py (kunlik/page-forms).
@@ -372,8 +372,8 @@ router.get('/form-stats', async (req, res) => {
             WHERE lp.lead_id = l.id
               AND LENGTH(REGEXP_REPLACE(lp.phone,'[^0-9]','','g')) >= 9
           )
-          ${from ? `AND (l.date_create AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date >= $1::date` : ''}
-          ${to   ? `AND (l.date_create AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date <= ${ from ? '$2' : '$1' }::date` : ''}
+          ${from ? `AND (l.date_create AT TIME ZONE 'Asia/Tashkent')::date >= $1::date` : ''}
+          ${to   ? `AND (l.date_create AT TIME ZONE 'Asia/Tashkent')::date <= ${ from ? '$2' : '$1' }::date` : ''}
         GROUP BY 1
       ),
       -- Latest-card-wins, computed ONCE per normalized phone (not a correlated
@@ -424,8 +424,8 @@ router.get('/form-stats', async (req, res) => {
         -- a valid phone). Without this, a spam wave inflates sifatsiz above
         -- jami_lid (15.07 Mountain 13.07: sifatsiz 28 vs jami_lid 12).
         AND LENGTH(REGEXP_REPLACE(fl.phone,'[^0-9]','','g')) >= 9
-        ${from ? `AND (fl.created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date >= $1::date` : ''}
-        ${to   ? `AND (fl.created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date <= ${ from ? '$2' : '$1' }::date` : ''}
+        ${from ? `AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date >= $1::date` : ''}
+        ${to   ? `AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date <= ${ from ? '$2' : '$1' }::date` : ''}
         ${formFilterClause}
       GROUP BY fl.campaign_name, sc.sotuv_boldi
       ORDER BY jami_lid DESC
@@ -740,7 +740,7 @@ router.get('/forms', async (req, res) => {
       `SELECT campaign_id, campaign_name,
               form_id,
               adset_id, adset_name,
-              COUNT(*) FILTER (WHERE (created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date BETWEEN $1::date AND $2::date
+              COUNT(*) FILTER (WHERE (created_time AT TIME ZONE 'Asia/Tashkent')::date BETWEEN $1::date AND $2::date
                                AND LENGTH(REGEXP_REPLACE(phone,'[^0-9]','','g')) >= 9)::int AS month_leads,
               COUNT(*) FILTER (WHERE LENGTH(REGEXP_REPLACE(phone,'[^0-9]','','g')) >= 9)::int AS total_leads
        FROM facebook_leads
@@ -806,8 +806,8 @@ router.get('/forms', async (req, res) => {
       LEFT JOIN stages ds ON ds.id = dp.stage_id
       WHERE fl.form_id IS NOT NULL
         AND LENGTH(REGEXP_REPLACE(fl.phone,'[^0-9]','','g')) >= 9
-        AND (fl.created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date >= $1::date
-        AND (fl.created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date <= $2::date
+        AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date >= $1::date
+        AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date <= $2::date
       GROUP BY fl.form_id
     `, [since, until]);
     const sifatliMap = {};
@@ -1097,8 +1097,8 @@ router.get('/leads', async (req, res) => {
         -- matches the cleaned JAMI LID / sifatsiz aggregates (a real person
         -- always leaves a >=9-digit phone).
         AND LENGTH(REGEXP_REPLACE(fl.phone,'[^0-9]','','g')) >= 9
-        AND ($3::date IS NULL OR (fl.created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date >= $3::date)
-        AND ($4::date IS NULL OR (fl.created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date <= $4::date)
+        AND ($3::date IS NULL OR (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date >= $3::date)
+        AND ($4::date IS NULL OR (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date <= $4::date)
       ORDER BY fl.created_time DESC, l.id DESC
       LIMIT 1000
     `, [form_id || null, campaign_id || null, from || null, to || null, campaign_name || null]);
@@ -1204,8 +1204,8 @@ router.get('/creatives', async (req, res) => {
       LEFT JOIN stages s ON s.id = le.stage_id
       LEFT JOIN deal_latest dp ON dp.last9 = RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9) AND RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9) <> ''
       LEFT JOIN stages ds ON ds.id = dp.stage_id
-      WHERE (fl.created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date >= $1::date
-        AND (fl.created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date <= $2::date
+      WHERE (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date >= $1::date
+        AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date <= $2::date
       GROUP BY fl.adset_name, fl.campaign_name
       ORDER BY meta_leads DESC
     `, [since, until, sotuvFrom, sotuvTo]);
@@ -1374,8 +1374,8 @@ router.get('/creative-deals', async (req, res) => {
           JOIN stages ds ON ds.id = d.stage_id AND ds.is_won = true
           LEFT JOIN stages s ON s.id = d.stage_id
           LEFT JOIN responsibles r ON r.id = d.responsible_id
-          WHERE (fl.created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date >= $1::date
-            AND (fl.created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date <= $2::date
+          WHERE (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date >= $1::date
+            AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date <= $2::date
             AND d.uf_bp_sale_date >= $3::date
             AND d.uf_bp_sale_date <= $4::date
             ${adset_name ? "AND fl.adset_name = $5" : "AND fl.campaign_name = $5"}
@@ -1419,7 +1419,7 @@ router.get('/creative-leads', async (req, res) => {
         SELECT RIGHT(REGEXP_REPLACE(phone, '[^0-9]', '', 'g'), 9) AS last9
         FROM facebook_leads
         WHERE phone IS NOT NULL
-          AND (created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date BETWEEN $2::date AND $3::date
+          AND (created_time AT TIME ZONE 'Asia/Tashkent')::date BETWEEN $2::date AND $3::date
         GROUP BY last9
         HAVING COUNT(*) > 1
       )
@@ -1449,8 +1449,8 @@ router.get('/creative-leads', async (req, res) => {
          = RIGHT(REGEXP_REPLACE(fl.phone, '[^0-9]', '', 'g'), 9)
       LEFT JOIN deals d ON d.id = dp2.deal_id
       WHERE fl.adset_name = $1
-        AND (fl.created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date >= $2::date
-        AND (fl.created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date <= $3::date
+        AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date >= $2::date
+        AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date <= $3::date
       GROUP BY fl.id, fl.full_name, fl.phone, fl.created_time, fl.platform, fl.campaign_name,
                l.id, s.name, s.bitrix_id, dp.last9
       ORDER BY fl.created_time DESC
