@@ -17,43 +17,45 @@ async function ensurePbxTables() {
       total_rows  INTEGER DEFAULT 0
     )
   `);
+  // Live call data actually lands in the Bitrix-telephony `calls` table
+  // (populated by dashboard.js), NOT OnlinePBX — the OnlinePBX pull was never
+  // wired up (ONPBX_DOMAIN unset → startCallSync no-ops). So expose `calls` /
+  // `responsibles` under the pbx_calls / pbx_users names the call-stats code
+  // expects, as read-only VIEWS. Column mapping:
+  //   direction   ← call_type (1=outbound, 2/3=inbound); no local (all external)
+  //   answered    ← duration >= 10s (matches the drill-down's own success rule;
+  //                 talk_time is not stored, so call duration is the proxy)
+  //   customer_*  ← phone_number (fallback caller/destination), last-9 normalised
+  // DROP first so a re-run replaces whatever object (table or view) is there.
+  await pool.query(`DROP VIEW IF EXISTS pbx_calls`);
+  await pool.query(`DROP VIEW IF EXISTS pbx_users`);
+  await pool.query(`DROP TABLE IF EXISTS pbx_calls CASCADE`);
+  await pool.query(`DROP TABLE IF EXISTS pbx_users CASCADE`);
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS pbx_users (
-      ext            TEXT PRIMARY KEY,   -- extension number, e.g. "101"
-      name           TEXT,               -- operator name as set in the PBX panel
-      enabled        BOOLEAN DEFAULT TRUE,
-      responsible_id INTEGER,            -- Bitrix user with the same name, when matched
-      synced_at      TIMESTAMPTZ DEFAULT NOW()
-    )
+    CREATE VIEW pbx_users AS
+    SELECT r.id::text AS ext,
+           NULLIF(TRIM(COALESCE(r.name,'') || ' ' || COALESCE(r.last_name,'')), '') AS name
+    FROM responsibles r
   `);
   await pool.query(`
-    CREATE TABLE IF NOT EXISTS pbx_calls (
-      uuid               TEXT PRIMARY KEY,
-      direction          TEXT,          -- inbound | outbound | local (accountcode)
-      caller_number      TEXT,
-      caller_name        TEXT,
-      destination_number TEXT,
-      operator_ext       TEXT REFERENCES pbx_users(ext),
-      customer_number    TEXT,          -- the external party, whichever side it is
-      customer_norm      TEXT,          -- last 9 digits, for matching lead phones
-      start_stamp        TIMESTAMPTZ,
-      end_stamp          TIMESTAMPTZ,
-      duration           INTEGER DEFAULT 0,   -- total call seconds
-      talk_time          INTEGER DEFAULT 0,   -- user_talk_time — live conversation seconds
-      answered           BOOLEAN DEFAULT FALSE,
-      contacted          BOOLEAN,             -- inbound only; NULL for outbound/local
-      hangup_cause       TEXT,
-      gateway            TEXT,
-      quality_score      INTEGER,
-      events             JSONB,
-      raw                JSONB,
-      synced_at          TIMESTAMPTZ DEFAULT NOW()
-    )
+    CREATE VIEW pbx_calls AS
+    SELECT
+      c.id::text                                                          AS uuid,
+      c.responsible_id::text                                              AS operator_ext,
+      CASE c.call_type WHEN 1 THEN 'outbound' WHEN 2 THEN 'inbound'
+                       WHEN 3 THEN 'inbound' ELSE 'outbound' END          AS direction,
+      NULLIF(RIGHT(regexp_replace(
+        COALESCE(c.phone_number, c.caller_number, c.destination_number, ''),
+        '[^0-9]', '', 'g'), 9), '')                                       AS customer_norm,
+      COALESCE(c.phone_number, c.caller_number, c.destination_number)     AS customer_number,
+      c.call_start                                                        AS start_stamp,
+      COALESCE(c.duration, 0)                                             AS duration,
+      CASE WHEN COALESCE(c.duration,0) >= 10 THEN COALESCE(c.duration,0)
+           ELSE 0 END                                                     AS talk_time,
+      (COALESCE(c.duration,0) >= 10)                                      AS answered,
+      c.status_name                                                       AS hangup_cause
+    FROM calls c
   `);
-  await pool.query(`CREATE INDEX IF NOT EXISTS pbx_calls_start_idx     ON pbx_calls(start_stamp)`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS pbx_calls_operator_idx  ON pbx_calls(operator_ext, start_stamp)`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS pbx_calls_direction_idx ON pbx_calls(direction, start_stamp)`);
-  await pool.query(`CREATE INDEX IF NOT EXISTS pbx_calls_customer_idx  ON pbx_calls(customer_norm)`);
   // Normalised phone lookups used by /call-list & the Bosqich filter to attach
   // the newest same-phone lead/deal to each call.
   await pool.query(`
