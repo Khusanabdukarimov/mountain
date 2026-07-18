@@ -740,8 +740,9 @@ router.get('/forms', async (req, res) => {
       `SELECT campaign_id, campaign_name,
               form_id,
               adset_id, adset_name,
-              COUNT(*) FILTER (WHERE (created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date BETWEEN $1::date AND $2::date)::int AS month_leads,
-              COUNT(*)::int AS total_leads
+              COUNT(*) FILTER (WHERE (created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date BETWEEN $1::date AND $2::date
+                               AND LENGTH(REGEXP_REPLACE(phone,'[^0-9]','','g')) >= 9)::int AS month_leads,
+              COUNT(*) FILTER (WHERE LENGTH(REGEXP_REPLACE(phone,'[^0-9]','','g')) >= 9)::int AS total_leads
        FROM facebook_leads
        WHERE campaign_id IS NOT NULL AND form_id IS NOT NULL
          AND form_id NOT IN ('1581692690210297')
@@ -804,6 +805,7 @@ router.get('/forms', async (req, res) => {
       LEFT JOIN deal_latest dp ON dp.last9 = RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9) AND RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9) <> ''
       LEFT JOIN stages ds ON ds.id = dp.stage_id
       WHERE fl.form_id IS NOT NULL
+        AND LENGTH(REGEXP_REPLACE(fl.phone,'[^0-9]','','g')) >= 9
         AND (fl.created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date >= $1::date
         AND (fl.created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date <= $2::date
       GROUP BY fl.form_id
@@ -1091,6 +1093,10 @@ router.get('/leads', async (req, res) => {
       WHERE ($1::text IS NULL OR fl.form_id = $1)
         AND ($2::text IS NULL OR fl.campaign_id = $2)
         AND ($5::text IS NULL OR fl.campaign_name = $5)
+        -- Hide junk/bot submissions ("7","333","767"...) so the leads list
+        -- matches the cleaned JAMI LID / sifatsiz aggregates (a real person
+        -- always leaves a >=9-digit phone).
+        AND LENGTH(REGEXP_REPLACE(fl.phone,'[^0-9]','','g')) >= 9
         AND ($3::date IS NULL OR (fl.created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date >= $3::date)
         AND ($4::date IS NULL OR (fl.created_time AT TIME ZONE 'Asia/Tashkent' - INTERVAL '3 hours')::date <= $4::date)
       ORDER BY fl.created_time DESC, l.id DESC
