@@ -342,7 +342,7 @@ router.get('/form-stats', async (req, res) => {
         SELECT fl.campaign_name, COUNT(DISTINCT d.id) AS cnt
         FROM deals d
         JOIN deal_phones dp ON dp.deal_id = d.id
-        JOIN facebook_leads fl ON RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9) = RIGHT(REGEXP_REPLACE(dp.phone,'[^0-9]','','g'),9)
+        JOIN facebook_leads fl ON fl.phone_norm = dp.phone_norm
         JOIN stages ds ON ds.id = d.stage_id AND ds.is_won = true
         WHERE d.lead_id IS NULL
           AND fl.campaign_name IS NOT NULL
@@ -370,7 +370,7 @@ router.get('/form-stats', async (req, res) => {
           AND EXISTS (
             SELECT 1 FROM lead_phones lp
             WHERE lp.lead_id = l.id
-              AND LENGTH(REGEXP_REPLACE(lp.phone,'[^0-9]','','g')) >= 9
+              AND LENGTH(lp.phone_norm) >= 9
           )
           ${from ? `AND (l.date_create AT TIME ZONE 'Asia/Tashkent')::date >= $1::date` : ''}
           ${to   ? `AND (l.date_create AT TIME ZONE 'Asia/Tashkent')::date <= ${ from ? '$2' : '$1' }::date` : ''}
@@ -381,17 +381,17 @@ router.get('/form-stats', async (req, res) => {
       -- contact's phone can match several Bitrix cards; only the newest counts.
       lead_latest AS (
         SELECT DISTINCT ON (last9) last9, l.id, l.stage_id FROM (
-          SELECT RIGHT(REGEXP_REPLACE(lp.phone,'[^0-9]','','g'),9) AS last9, lp.lead_id
+          SELECT lp.phone_norm AS last9, lp.lead_id
           FROM lead_phones lp
-          WHERE RIGHT(REGEXP_REPLACE(lp.phone,'[^0-9]','','g'),9) <> ''
+          WHERE lp.phone_norm <> ''
         ) p JOIN leads l ON l.id = p.lead_id
         ORDER BY last9, l.date_create DESC NULLS LAST, l.id DESC
       ),
       deal_latest AS (
         SELECT DISTINCT ON (last9) last9, d.id AS deal_id, d.stage_id FROM (
-          SELECT RIGHT(REGEXP_REPLACE(dp.phone,'[^0-9]','','g'),9) AS last9, dp.deal_id
+          SELECT dp.phone_norm AS last9, dp.deal_id
           FROM deal_phones dp
-          WHERE RIGHT(REGEXP_REPLACE(dp.phone,'[^0-9]','','g'),9) <> ''
+          WHERE dp.phone_norm <> ''
         ) p JOIN deals d ON d.id = p.deal_id AND d.lead_id IS NULL
         ORDER BY last9, d.date_create DESC NULLS LAST, d.id DESC
       )
@@ -403,7 +403,7 @@ router.get('/form-stats', async (req, res) => {
         -- Filters out spam/bot submissions ("1", "Ttff", etc.) that inflate jami_lid
         -- but were never real people — see spam wave found in Mountain 13.07 / patent
         -- campaigns on 2026-07-15 (27 of 43 leads had junk phones).
-        COUNT(DISTINCT CASE WHEN LENGTH(REGEXP_REPLACE(fl.phone, '[^0-9]', '', 'g')) >= 9 THEN fl.id END)::int              AS tasdiqlangan,
+        COUNT(DISTINCT CASE WHEN LENGTH(fl.phone_norm) >= 9 THEN fl.id END)::int              AS tasdiqlangan,
         COUNT(DISTINCT CASE WHEN le.id IS NOT NULL OR dp.deal_id IS NOT NULL THEN fl.id END)::int                              AS bitrixda_bor,
         COUNT(DISTINCT CASE WHEN le.id IS NULL AND dp.deal_id IS NULL THEN fl.id END)::int                                     AS bitrixda_yoq,
         COUNT(DISTINCT CASE WHEN (le.id IS NOT NULL AND s.bitrix_id IN ('THINKING','UC_KXC3ZW','CONSULTATION','UC_L28G68','NOT_TRANSFERRED','UC_5G8244','CONVERTED_CONSULT','CONVERTED','UC_NAZK5J','RECYCLED'))
@@ -412,9 +412,9 @@ router.get('/form-stats', async (req, res) => {
         COUNT(DISTINCT CASE WHEN s.bitrix_id = 'UC_NAZK5J' OR ds.bitrix_id = 'UC_NAZK5J' THEN fl.id END)::int                AS bekor_boldi,
         COALESCE(sc.sotuv_boldi, 0)::int                                                                                       AS sotuv_boldi
       FROM facebook_leads fl
-      LEFT JOIN lead_latest le ON le.last9 = RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9) AND RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9) <> ''
+      LEFT JOIN lead_latest le ON le.last9 = fl.phone_norm AND fl.phone_norm <> ''
       LEFT JOIN stages s  ON s.id  = le.stage_id
-      LEFT JOIN deal_latest dp ON dp.last9 = RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9) AND RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9) <> ''
+      LEFT JOIN deal_latest dp ON dp.last9 = fl.phone_norm AND fl.phone_norm <> ''
       LEFT JOIN stages ds ON ds.id = dp.stage_id
       LEFT JOIN sotuv_by_campaign sc ON sc.campaign_name = fl.campaign_name
       LEFT JOIN bitrix_utm bu ON bu.campaign_name = fl.campaign_name
@@ -423,7 +423,7 @@ router.get('/form-stats', async (req, res) => {
         -- sifatsiz / bekor stay consistent with jami_lid (which already requires
         -- a valid phone). Without this, a spam wave inflates sifatsiz above
         -- jami_lid (15.07 Mountain 13.07: sifatsiz 28 vs jami_lid 12).
-        AND LENGTH(REGEXP_REPLACE(fl.phone,'[^0-9]','','g')) >= 9
+        AND LENGTH(fl.phone_norm) >= 9
         ${from ? `AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date >= $1::date` : ''}
         ${to   ? `AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date <= ${ from ? '$2' : '$1' }::date` : ''}
         ${formFilterClause}
@@ -781,15 +781,15 @@ router.get('/forms', async (req, res) => {
     const { rows: sifatliRows } = await pool.query(`
       WITH lead_latest AS (
         SELECT DISTINCT ON (last9) last9, l.id, l.stage_id FROM (
-          SELECT RIGHT(REGEXP_REPLACE(lp.phone,'[^0-9]','','g'),9) AS last9, lp.lead_id
-          FROM lead_phones lp WHERE RIGHT(REGEXP_REPLACE(lp.phone,'[^0-9]','','g'),9) <> ''
+          SELECT lp.phone_norm AS last9, lp.lead_id
+          FROM lead_phones lp WHERE lp.phone_norm <> ''
         ) p JOIN leads l ON l.id = p.lead_id
         ORDER BY last9, l.date_create DESC NULLS LAST, l.id DESC
       ),
       deal_latest AS (
         SELECT DISTINCT ON (last9) last9, d.id AS deal_id, d.stage_id FROM (
-          SELECT RIGHT(REGEXP_REPLACE(dp.phone,'[^0-9]','','g'),9) AS last9, dp.deal_id
-          FROM deal_phones dp WHERE RIGHT(REGEXP_REPLACE(dp.phone,'[^0-9]','','g'),9) <> ''
+          SELECT dp.phone_norm AS last9, dp.deal_id
+          FROM deal_phones dp WHERE dp.phone_norm <> ''
         ) p JOIN deals d ON d.id = p.deal_id AND d.lead_id IS NULL
         ORDER BY last9, d.date_create DESC NULLS LAST, d.id DESC
       )
@@ -800,12 +800,12 @@ router.get('/forms', async (req, res) => {
             OR (dp.deal_id IS NOT NULL AND ds.bitrix_id IN ('THINKING','UC_KXC3ZW','CONSULTATION','UC_L28G68','NOT_TRANSFERRED','UC_5G8244','CONVERTED_CONSULT','CONVERTED','UC_NAZK5J','RECYCLED'))
           THEN fl.id END)::int AS sifatli_lid
       FROM facebook_leads fl
-      LEFT JOIN lead_latest le ON le.last9 = RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9) AND RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9) <> ''
+      LEFT JOIN lead_latest le ON le.last9 = fl.phone_norm AND fl.phone_norm <> ''
       LEFT JOIN stages s ON s.id = le.stage_id
-      LEFT JOIN deal_latest dp ON dp.last9 = RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9) AND RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9) <> ''
+      LEFT JOIN deal_latest dp ON dp.last9 = fl.phone_norm AND fl.phone_norm <> ''
       LEFT JOIN stages ds ON ds.id = dp.stage_id
       WHERE fl.form_id IS NOT NULL
-        AND LENGTH(REGEXP_REPLACE(fl.phone,'[^0-9]','','g')) >= 9
+        AND LENGTH(fl.phone_norm) >= 9
         AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date >= $1::date
         AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date <= $2::date
       GROUP BY fl.form_id
@@ -1081,6 +1081,9 @@ router.get('/leads', async (req, res) => {
     // version joined lead_phones directly, which multiplied rows — junk/spam
     // phones matched dozens of Bitrix entries, so LIMIT 1000 filled up with
     // duplicates of the newest few leads and the drill-down showed ~26 of 373.
+    // The phone match is fl.phone_norm = lp.phone_norm — both are GENERATED
+    // last-9-digit columns with b-tree indexes, so each LATERAL probe is a
+    // single index lookup, not a per-row REGEXP_REPLACE scan of lead_phones.
     const { rows } = await pool.query(`
       SELECT
         fl.id, fl.full_name, fl.phone, fl.email,
@@ -1095,9 +1098,7 @@ router.get('/leads', async (req, res) => {
         FROM lead_phones lp
         JOIN leads  l ON l.id = lp.lead_id
         LEFT JOIN stages s ON s.id = l.stage_id
-        WHERE LENGTH(REGEXP_REPLACE(fl.phone, '[^0-9]', '', 'g')) >= 7
-          AND RIGHT(REGEXP_REPLACE(lp.phone, '[^0-9]', '', 'g'), 9)
-            = RIGHT(REGEXP_REPLACE(fl.phone,  '[^0-9]', '', 'g'), 9)
+        WHERE lp.phone_norm = fl.phone_norm
         ORDER BY l.date_create DESC NULLS LAST, l.id DESC
         LIMIT 1
       ) b ON TRUE
@@ -1106,8 +1107,8 @@ router.get('/leads', async (req, res) => {
         AND ($5::text IS NULL OR fl.campaign_name = $5)
         -- Hide junk/bot submissions ("7","333","767"...) so the leads list
         -- matches the cleaned JAMI LID / sifatsiz aggregates (a real person
-        -- always leaves a >=9-digit phone).
-        AND LENGTH(REGEXP_REPLACE(fl.phone,'[^0-9]','','g')) >= 9
+        -- always leaves a >=9-digit phone → phone_norm is exactly 9 chars).
+        AND LENGTH(fl.phone_norm) >= 9
         AND ($3::date IS NULL OR (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date >= $3::date)
         AND ($4::date IS NULL OR (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date <= $4::date)
       ORDER BY fl.created_time DESC
@@ -1174,15 +1175,15 @@ router.get('/creatives', async (req, res) => {
     const { rows: qualRows } = await pool.query(`
       WITH lead_latest AS (
         SELECT DISTINCT ON (last9) last9, l.id, l.stage_id FROM (
-          SELECT RIGHT(REGEXP_REPLACE(lp.phone,'[^0-9]','','g'),9) AS last9, lp.lead_id
-          FROM lead_phones lp WHERE RIGHT(REGEXP_REPLACE(lp.phone,'[^0-9]','','g'),9) <> ''
+          SELECT lp.phone_norm AS last9, lp.lead_id
+          FROM lead_phones lp WHERE lp.phone_norm <> ''
         ) p JOIN leads l ON l.id = p.lead_id
         ORDER BY last9, l.date_create DESC NULLS LAST, l.id DESC
       ),
       deal_latest AS (
         SELECT DISTINCT ON (last9) last9, d.id AS deal_id, d.stage_id, d.uf_bp_sale_date FROM (
-          SELECT RIGHT(REGEXP_REPLACE(dp.phone,'[^0-9]','','g'),9) AS last9, dp.deal_id
-          FROM deal_phones dp WHERE RIGHT(REGEXP_REPLACE(dp.phone,'[^0-9]','','g'),9) <> ''
+          SELECT dp.phone_norm AS last9, dp.deal_id
+          FROM deal_phones dp WHERE dp.phone_norm <> ''
         ) p JOIN deals d ON d.id = p.deal_id
         ORDER BY last9, d.date_create DESC NULLS LAST, d.id DESC
       )
@@ -1205,9 +1206,9 @@ router.get('/creatives', async (req, res) => {
       FROM facebook_leads fl
       -- Latest-card-wins (see /form-stats): only the newest phone-matched
       -- lead/deal determines the quality columns for a returning contact.
-      LEFT JOIN lead_latest le ON le.last9 = RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9) AND RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9) <> ''
+      LEFT JOIN lead_latest le ON le.last9 = fl.phone_norm AND fl.phone_norm <> ''
       LEFT JOIN stages s ON s.id = le.stage_id
-      LEFT JOIN deal_latest dp ON dp.last9 = RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9) AND RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9) <> ''
+      LEFT JOIN deal_latest dp ON dp.last9 = fl.phone_norm AND fl.phone_norm <> ''
       LEFT JOIN stages ds ON ds.id = dp.stage_id
       WHERE (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date >= $1::date
         AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date <= $2::date
@@ -1231,8 +1232,8 @@ router.get('/creatives', async (req, res) => {
           JOIN leads le ON le.id = d.lead_id
           JOIN lead_phones lp ON lp.lead_id = le.id
           JOIN facebook_leads fl
-            ON RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9)
-             = RIGHT(REGEXP_REPLACE(lp.phone,'[^0-9]','','g'),9)
+            ON fl.phone_norm
+             = lp.phone_norm
             AND fl.campaign_name = le.utm_campaign
           WHERE d.uf_bp_sale_date >= $1::date AND d.uf_bp_sale_date <= $2::date
           UNION
@@ -1244,8 +1245,8 @@ router.get('/creatives', async (req, res) => {
           JOIN stages ds ON ds.id = d.stage_id AND ds.is_won = true
           JOIN deal_phones dp ON dp.deal_id = d.id
           JOIN facebook_leads fl
-            ON RIGHT(REGEXP_REPLACE(fl.phone,'[^0-9]','','g'),9)
-             = RIGHT(REGEXP_REPLACE(dp.phone,'[^0-9]','','g'),9)
+            ON fl.phone_norm
+             = dp.phone_norm
           WHERE d.lead_id IS NULL
             AND d.uf_bp_sale_date >= $1::date AND d.uf_bp_sale_date <= $2::date
         )
@@ -1351,8 +1352,8 @@ router.get('/creative-deals', async (req, res) => {
             s.name AS stage_name
           FROM facebook_leads fl
           JOIN deal_phones dp
-            ON RIGHT(REGEXP_REPLACE(dp.phone, '[^0-9]', '', 'g'), 9)
-             = RIGHT(REGEXP_REPLACE(fl.phone, '[^0-9]', '', 'g'), 9)
+            ON dp.phone_norm
+             = fl.phone_norm
           JOIN deals  d  ON d.id = dp.deal_id
           JOIN stages ds ON ds.id = d.stage_id AND ds.is_won = true
           LEFT JOIN stages s ON s.id = d.stage_id
@@ -1373,8 +1374,8 @@ router.get('/creative-deals', async (req, res) => {
             s.name AS stage_name
           FROM facebook_leads fl
           JOIN deal_phones dp
-            ON RIGHT(REGEXP_REPLACE(dp.phone, '[^0-9]', '', 'g'), 9)
-             = RIGHT(REGEXP_REPLACE(fl.phone, '[^0-9]', '', 'g'), 9)
+            ON dp.phone_norm
+             = fl.phone_norm
           JOIN deals  d  ON d.id = dp.deal_id
           JOIN stages ds ON ds.id = d.stage_id AND ds.is_won = true
           LEFT JOIN stages s ON s.id = d.stage_id
@@ -1443,15 +1444,15 @@ router.get('/creative-leads', async (req, res) => {
         (SELECT name FROM stages WHERE id = (SELECT stage_id FROM deals WHERE id = MIN(d.id))) AS deal_stage_name
       FROM facebook_leads fl
       LEFT JOIN dup_phones dp
-        ON RIGHT(REGEXP_REPLACE(fl.phone, '[^0-9]', '', 'g'), 9) = dp.last9
+        ON fl.phone_norm = dp.last9
       LEFT JOIN lead_phones lp
-        ON RIGHT(REGEXP_REPLACE(lp.phone, '[^0-9]', '', 'g'), 9)
-         = RIGHT(REGEXP_REPLACE(fl.phone, '[^0-9]', '', 'g'), 9)
+        ON lp.phone_norm
+         = fl.phone_norm
       LEFT JOIN leads  l ON l.id = lp.lead_id
       LEFT JOIN stages s ON s.id = l.stage_id
       LEFT JOIN deal_phones dp2
         ON RIGHT(REGEXP_REPLACE(dp2.phone, '[^0-9]', '', 'g'), 9)
-         = RIGHT(REGEXP_REPLACE(fl.phone, '[^0-9]', '', 'g'), 9)
+         = fl.phone_norm
       LEFT JOIN deals d ON d.id = dp2.deal_id
       WHERE fl.adset_name = $1
         AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date >= $2::date

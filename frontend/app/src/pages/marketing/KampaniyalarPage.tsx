@@ -177,8 +177,16 @@ function SotuvDealsPanel({ adsetName, month, year, from, to, sotuvFrom, sotuvTo 
 }
 
 // ── Lead sub-table ─────────────────────────────────────────────────────────────
+const LEADS_PAGE = 20; // how many drill-down rows to render before "show more"
+
 function LeadsSubTable({ formId, campaignId, from, to, campaignName }: { formId: string; campaignId: string; from: string; to: string; campaignName?: string }) {
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // Render in chunks: the backend returns the full period (up to 1000 leads),
+  // but showing 300+ rows at once is unreadable — start at LEADS_PAGE and reveal
+  // more on demand. Reset whenever the query inputs change (new form / period).
+  const [visibleCount, setVisibleCount] = useState(LEADS_PAGE);
+  useEffect(() => { setVisibleCount(LEADS_PAGE); }, [formId, campaignId, campaignName, from, to]);
+
   const q = useQuery({
     queryKey: ["form-leads", formId, campaignId, from, to, campaignName],
     queryFn: () => getFormLeads(formId, campaignId, from, to, campaignName),
@@ -186,6 +194,10 @@ function LeadsSubTable({ formId, campaignId, from, to, campaignName }: { formId:
   });
   if (q.isLoading) return <div className="px-5 py-3 text-[11px] text-text3 italic">Yuklanmoqda…</div>;
   if (!q.data?.leads?.length) return <div className="px-5 py-3 text-[11px] text-text3 italic">Lidlar yo'q.</div>;
+
+  const total = q.data.leads.length;
+  const shown = Math.min(visibleCount, total);
+  const remaining = total - shown;
   return (
     <div className="border-t border-border/30">
       <table className="w-full text-[11px]">
@@ -197,7 +209,7 @@ function LeadsSubTable({ formId, campaignId, from, to, campaignName }: { formId:
           </tr>
         </thead>
         <tbody>
-          {q.data.leads.map((l, idx) => {
+          {q.data.leads.slice(0, visibleCount).map((l, idx) => {
             const isOpen = expandedId === l.id;
             const fieldEntries = Object.entries(l.field_data || {});
             const stageColor = l.stage_code ? (STAGE_COLOR[l.stage_code] ?? "#94a3b8") : "#64748b";
@@ -261,6 +273,34 @@ function LeadsSubTable({ formId, campaignId, from, to, campaignName }: { formId:
           })}
         </tbody>
       </table>
+
+      {/* Show-more footer: reveal the next batch, or collapse back once fully open */}
+      <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-t border-border/20">
+        <span className="text-[10.5px] text-text3">{shown} / {total} ta lid</span>
+        {remaining > 0 ? (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => setVisibleCount(c => c + LEADS_PAGE)}
+              className="text-[11px] font-semibold text-blue px-3 py-1 rounded-md border border-blue/30 hover:bg-blue/10 transition-colors"
+            >
+              Yana {Math.min(LEADS_PAGE, remaining)} ta ko'rsatish
+            </button>
+            <button
+              onClick={() => setVisibleCount(total)}
+              className="text-[11px] font-medium text-text3 px-2 py-1 rounded-md hover:text-text hover:bg-bg3/50 transition-colors"
+            >
+              Hammasi ({total})
+            </button>
+          </div>
+        ) : total > LEADS_PAGE ? (
+          <button
+            onClick={() => setVisibleCount(LEADS_PAGE)}
+            className="text-[11px] font-medium text-text3 px-2 py-1 rounded-md hover:text-text hover:bg-bg3/50 transition-colors"
+          >
+            Yig'ish
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }

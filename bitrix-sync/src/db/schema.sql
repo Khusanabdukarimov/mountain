@@ -59,14 +59,18 @@ CREATE INDEX IF NOT EXISTS leads_date_create_idx ON leads(date_create);
 CREATE INDEX IF NOT EXISTS leads_source_idx ON leads(source_id);
 CREATE INDEX IF NOT EXISTS leads_uf_amo_date_idx ON leads(uf_amo_date);
 
--- Lead phone numbers
+-- Lead phone numbers. phone_norm = last 9 digits, computed once at write time
+-- (a GENERATED column) so phone-matching joins hit a plain b-tree index instead
+-- of re-running REGEXP_REPLACE per row. The normalization rule lives here, once.
 CREATE TABLE IF NOT EXISTS lead_phones (
-  id       SERIAL PRIMARY KEY,
-  lead_id  INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
-  phone    TEXT NOT NULL
+  id         SERIAL PRIMARY KEY,
+  lead_id    INTEGER NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+  phone      TEXT NOT NULL,
+  phone_norm TEXT GENERATED ALWAYS AS (RIGHT(REGEXP_REPLACE(phone, '[^0-9]', '', 'g'), 9)) STORED
 );
 
 CREATE INDEX IF NOT EXISTS lead_phones_lead_idx ON lead_phones(lead_id);
+CREATE INDEX IF NOT EXISTS lead_phones_pnorm_idx ON lead_phones(phone_norm);
 
 -- Deals
 CREATE TABLE IF NOT EXISTS deals (
@@ -96,14 +100,16 @@ CREATE INDEX IF NOT EXISTS deals_responsible_idx ON deals(responsible_id);
 CREATE INDEX IF NOT EXISTS deals_stage_idx ON deals(stage_id);
 CREATE INDEX IF NOT EXISTS deals_date_create_idx ON deals(date_create);
 
--- Deal phone numbers
+-- Deal phone numbers (see lead_phones for the phone_norm rationale).
 CREATE TABLE IF NOT EXISTS deal_phones (
-  id       SERIAL PRIMARY KEY,
-  deal_id  INTEGER NOT NULL REFERENCES deals(id) ON DELETE CASCADE,
-  phone    TEXT NOT NULL
+  id         SERIAL PRIMARY KEY,
+  deal_id    INTEGER NOT NULL REFERENCES deals(id) ON DELETE CASCADE,
+  phone      TEXT NOT NULL,
+  phone_norm TEXT GENERATED ALWAYS AS (RIGHT(REGEXP_REPLACE(phone, '[^0-9]', '', 'g'), 9)) STORED
 );
 
 CREATE INDEX IF NOT EXISTS deal_phones_deal_idx ON deal_phones(deal_id);
+CREATE INDEX IF NOT EXISTS deal_phones_pnorm_idx ON deal_phones(phone_norm);
 
 -- Lead stage history
 CREATE TABLE IF NOT EXISTS lead_stage_history (
@@ -157,12 +163,14 @@ CREATE TABLE IF NOT EXISTS facebook_leads (
   email         TEXT,
   field_data    JSONB,                     -- all raw form fields
   created_time  TIMESTAMPTZ,
-  synced_at     TIMESTAMPTZ DEFAULT NOW()
+  synced_at     TIMESTAMPTZ DEFAULT NOW(),
+  phone_norm    TEXT GENERATED ALWAYS AS (RIGHT(REGEXP_REPLACE(phone, '[^0-9]', '', 'g'), 9)) STORED
 );
 
 CREATE INDEX IF NOT EXISTS fb_leads_campaign_idx  ON facebook_leads(campaign_id);
 CREATE INDEX IF NOT EXISTS fb_leads_created_idx   ON facebook_leads(created_time);
 CREATE INDEX IF NOT EXISTS fb_leads_form_idx      ON facebook_leads(form_id);
+CREATE INDEX IF NOT EXISTS fb_leads_pnorm_idx      ON facebook_leads(phone_norm);
 
 -- Sync state tracker
 CREATE TABLE IF NOT EXISTS sync_state (

@@ -91,6 +91,22 @@ Promise.all([
     CREATE INDEX IF NOT EXISTS deals_begindate_idx        ON deals(begindate);
     CREATE INDEX IF NOT EXISTS deals_uf_service_idx       ON deals(uf_service);
   `).catch(err => console.error('[startup] leads/deals migration failed:', err.message)),
+  // Normalized-phone columns (last 9 digits, GENERATED once at write time) +
+  // b-tree indexes. Phone-matching joins across the app use these instead of
+  // re-running REGEXP_REPLACE per row — the form drill-down and per-form counts
+  // go from N table scans to N index lookups. Adding a STORED generated column
+  // rewrites the table once; IF NOT EXISTS makes the whole block idempotent.
+  pool.query(`
+    ALTER TABLE lead_phones    ADD COLUMN IF NOT EXISTS phone_norm TEXT
+      GENERATED ALWAYS AS (RIGHT(REGEXP_REPLACE(phone, '[^0-9]', '', 'g'), 9)) STORED;
+    ALTER TABLE deal_phones    ADD COLUMN IF NOT EXISTS phone_norm TEXT
+      GENERATED ALWAYS AS (RIGHT(REGEXP_REPLACE(phone, '[^0-9]', '', 'g'), 9)) STORED;
+    ALTER TABLE facebook_leads ADD COLUMN IF NOT EXISTS phone_norm TEXT
+      GENERATED ALWAYS AS (RIGHT(REGEXP_REPLACE(phone, '[^0-9]', '', 'g'), 9)) STORED;
+    CREATE INDEX IF NOT EXISTS lead_phones_pnorm_idx ON lead_phones(phone_norm);
+    CREATE INDEX IF NOT EXISTS deal_phones_pnorm_idx ON deal_phones(phone_norm);
+    CREATE INDEX IF NOT EXISTS fb_leads_pnorm_idx    ON facebook_leads(phone_norm);
+  `).catch(err => console.error('[startup] phone_norm migration failed:', err.message)),
   pool.query(`
     UPDATE stages SET is_won = TRUE, is_final = TRUE
       WHERE entity = 'deal' AND (
