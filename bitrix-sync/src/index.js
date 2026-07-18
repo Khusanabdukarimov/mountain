@@ -13,7 +13,8 @@ const taskCreated  = require('./webhooks/taskCreated');
 const taskUpdated  = require('./webhooks/taskUpdated');
 const taskDeleted  = require('./webhooks/taskDeleted');
 const dashboardRouter                    = require('./api/dashboard');
-const { startCallsAutoSync }             = require('./api/dashboard');
+const callsRouter                        = require('./api/calls');
+const { ensurePbxTables, startCallSync } = require('./sync/syncCalls');
 const campaignsRouter  = require('./api/campaigns');
 const { router: rejaRouter, ensureSchema: rejaEnsureSchema } = require('./api/reja');
 const marketingRouter  = require('./api/marketing');
@@ -49,6 +50,9 @@ app.get('/webhook/facebook', fbVerify);
 app.post('/webhook/facebook', fbReceive);
 
 // ── Dashboard API ─────────────────────────────────────────────
+// Calls come from OnlinePBX now — this router owns /call-stats-full,
+// /call-list, /call-filter-options, /sync-calls (mounted first so it wins).
+app.use('/api/dashboard', callsRouter);
 app.use('/api/dashboard', dashboardRouter);
 
 // ── Campaigns API (Meta Ads, cached) ──────────────────────────
@@ -97,9 +101,10 @@ Promise.all([
       WHERE entity = 'deal' AND (bitrix_id = 'LOSE' OR bitrix_id LIKE '%:LOSE');
   `).catch(err => console.error('[startup] stages restore migration failed:', err.message)),
   rejaEnsureSchema().catch(err => console.error('[startup] reja migration failed:', err.message)),
+  ensurePbxTables().catch(err => console.error('[startup] pbx migration failed:', err.message)),
 ]).then(() => {
   app.listen(PORT, () => {
-    startCallsAutoSync();
+    startCallSync();
     console.log(`[bitrix-sync] Server running on port ${PORT}`);
 
     // Daily lead reconcile (01:00 Tashkent) — refreshes UTM tags that Bitrix's
