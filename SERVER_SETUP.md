@@ -170,8 +170,9 @@ BITRIX_WEBHOOK_URL=https://your-domain.bitrix24.com/rest/1/your-token
 PORT=3001
 
 # OnlinePBX — Call statistikasi manbasi (Bitrix telephony o'rniga)
-ONPBX_DOMAIN=pbx36933.onpbx.ru
-ONPBX_API_KEY=RXI1YkY1Q29lVENUcnRpUE04NW5YektYcFRuRmZNUUo
+# API key: OnlinePBX panel → Настройки → API (real qiymatlar faqat server .env'da!)
+ONPBX_DOMAIN=your-pbx.onpbx.ru
+ONPBX_API_KEY=your-onlinepbx-api-key
 CALL_SYNC_INTERVAL_MIN=5
 CALL_SYNC_LOOKBACK_HOURS=3
 CALL_SYNC_BACKFILL_DAYS=45
