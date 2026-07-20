@@ -264,6 +264,24 @@ export default function KunlikPage() {
   ];
   const visibleSections = allSections.filter(s => active === "all" || s.key === active);
 
+  // Jami OYLIK REJA = sum of every section's plan per metric (overall reja =
+  // total of the parts). Falls back to a directly-entered "jami" plan for any
+  // metric no section has a plan for, so nothing that was typed disappears.
+  const jamiPlans: Partial<Record<string, number>> = (() => {
+    const out: Record<string, number> = {};
+    const secKeys = allSections.filter(s => s.key !== "jami").map(s => s.key);
+    const keys = new Set<string>();
+    for (const sk of secKeys) for (const k of Object.keys(plans[sk] ?? {})) keys.add(k);
+    for (const k of Object.keys(plans["jami"] ?? {})) keys.add(k);
+    for (const k of keys) {
+      let sum = 0, any = false;
+      for (const sk of secKeys) { const v = plans[sk]?.[k]; if (v != null) { sum += v; any = true; } }
+      if (any) out[k] = sum;
+      else if (plans["jami"]?.[k] != null) out[k] = plans["jami"]![k]!;
+    }
+    return out;
+  })();
+
   // Jami = sum of every section tab's EFFECTIVE cell — API/CRM auto data plus
   // manual overrides. Only Target arrives from the API; other sections'
   // numbers (e.g. Instagram/Networking budgets) are typed in by hand, so
@@ -643,7 +661,7 @@ export default function KunlikPage() {
                       days={days}
                       isCurrent={isCurrent}
                       todayDay={todayDay}
-                      plans={plans["jami"] ?? {}}
+                      plans={jamiPlans}
                       overrides={{}}
                       cellValue={(m, i) => jamiCellValue(m, i)}
                       faktTotal={(m) => jamiFaktTotal(m)}
