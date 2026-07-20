@@ -799,7 +799,6 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
         lead_params: dict = {
             "since": since, "until": until,
             "sifatli": _SIFATLI_STAGES, "bekor": _BEKOR_STAGES,
-            "sifatsiz": _SIFATSIZ_STAGES,
         }
         if resp_ids:
             lead_params["resp_ids"] = resp_ids
@@ -813,9 +812,7 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
                                       OR (dp.deal_id IS NOT NULL AND ds.bitrix_id = ANY(:sifatli))
                                     THEN fl.id END) AS qual_leads,
                 COUNT(DISTINCT CASE WHEN s.bitrix_id = ANY(:bekor) OR ds.bitrix_id = ANY(:bekor)
-                                    THEN fl.id END) AS cancelled,
-                COUNT(DISTINCT CASE WHEN s.bitrix_id = ANY(:sifatsiz) OR ds.bitrix_id = ANY(:sifatsiz)
-                                    THEN fl.id END) AS sifatsiz
+                                    THEN fl.id END) AS cancelled
             FROM facebook_leads fl
             LEFT JOIN lead_phones lp
               ON RIGHT(REGEXP_REPLACE(lp.phone, '[^0-9]', '', 'g'), 9)
@@ -837,14 +834,39 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
         # Note: no "AND fl.campaign_name IS NOT NULL" — /creatives counts
         # campaign-less FB leads too (as 'N/A'), so adding that filter would
         # break the "all targetologs" case.
-        for day, leads, qual_leads, cancelled, sifatsiz in conn.execute(lead_sql, lead_params):
+        for day, leads, qual_leads, cancelled in conn.execute(lead_sql, lead_params):
             if day is None or day < 1 or day > days_in_month:
                 continue
             idx = int(day) - 1
             result["target"]["leads"][idx]      += int(leads)
             result["target"]["qual_leads"][idx] += int(qual_leads)
             result["target"]["cancelled"][idx]  += int(cancelled)
-            result["target"]["sifatsiz"][idx]   += int(sifatsiz)
+
+        # ── SIFATSIZ (Bitrix leads in UC_F8K4GI, source=Target) ──────────
+        # Uses Bitrix leads directly (like the Voronka/Dashboard), NOT the
+        # facebook_leads phone-match, so the two pages agree on Sifatsiz.
+        sifatsiz_params: dict = {"since": since, "until": until, "src": TARGET_SRC,
+                                 "sifatsiz": _SIFATSIZ_STAGES}
+        if resp_ids:
+            sifatsiz_params["resp_ids"] = resp_ids
+        sifatsiz_campaign_filter = _build_campaign_filter("l", sifatsiz_params)
+        resp_lead = "AND l.responsible_id = ANY(:resp_ids)" if resp_ids else ""
+        sifatsiz_sql = _text(f"""
+            SELECT EXTRACT(DAY FROM l.date_create AT TIME ZONE 'Asia/Tashkent')::int AS day,
+                   COUNT(*) AS cnt
+            FROM leads l
+            JOIN stages s ON s.id = l.stage_id AND s.entity = 'lead'
+                         AND s.bitrix_id = ANY(:sifatsiz)
+            WHERE (l.date_create AT TIME ZONE 'Asia/Tashkent')::date BETWEEN :since AND :until
+              AND l.source_id = :src
+              {sifatsiz_campaign_filter}
+              {resp_lead}
+            GROUP BY 1
+        """)
+        for day, cnt in conn.execute(sifatsiz_sql, sifatsiz_params):
+            if day is None or day < 1 or day > days_in_month:
+                continue
+            result["target"]["sifatsiz"][int(day) - 1] += int(cnt)
 
         # ── DEAL metrics (meetings, shartnoma) by date_create ───────────
         deal_params: dict = {"since": since, "until": until, "src": TARGET_SRC}
