@@ -25,6 +25,7 @@ const CUSTOM_COLORS = ["#6366f1", "#0891b2", "#059669", "#d97706", "#dc2626", "#
 type MetricKey =
   | "budget" | "leads" | "qual_leads" | "meetings"
   | "deals"  | "deals_sum" | "sales_count" | "sales_sum" | "cancelled"
+  | "sifatsiz"
   | "tolangan"
   | "roas" | "qual_lead_cost" | "qual_conversion" | "customer_cost";
 
@@ -47,6 +48,7 @@ const METRICS: MetricDef[] = [
   { key: "sales_count",    label: "Sotuvlar soni",        format: "num"   },
   { key: "sales_sum",      label: "Sotuvlar summasi",     format: "money" },
   { key: "cancelled",      label: "Bekor bo'ldi",         format: "num"   },
+  { key: "sifatsiz",       label: "Sifatsiz",             format: "num"   },
   { key: "roas",           label: "ROAS",                 format: "pct",  computed: true },
   { key: "customer_cost",  label: "Mijoz narxi",          format: "money", computed: true },
 ];
@@ -138,7 +140,7 @@ export default function KunlikPage() {
     const empty = () => Array(days).fill(0) as number[];
     type DataMap = {
       budget: number[]; leads: number[]; qual_leads: number[]; meetings: number[];
-      deals: number[]; deals_sum: number[]; sales_count: number[]; sales_sum: number[]; cancelled: number[];
+      deals: number[]; deals_sum: number[]; sales_count: number[]; sales_sum: number[]; cancelled: number[]; sifatsiz: number[];
     };
     const buildTarget = (): DataMap => {
       const metaFb = qMeta.data?.data?.['target'];
@@ -158,6 +160,7 @@ export default function KunlikPage() {
         sales_count: (crm?.sales_count ?? empty()) as number[],
         sales_sum:   (crm?.sales_sum   ?? empty()) as number[],
         cancelled:   (crm?.cancelled   ?? empty()) as number[],
+        sifatsiz:    (crm?.sifatsiz    ?? empty()) as number[],
       };
     };
     const buildCustom = (d: ReturnType<typeof getKunlikSegment> extends Promise<{ data: infer D }> ? D : never): DataMap => ({
@@ -170,6 +173,7 @@ export default function KunlikPage() {
       sales_count: ((d as { sales_count?: number[] })?.sales_count ?? empty()) as number[],
       sales_sum:   ((d as { sales_sum?: number[] })?.sales_sum   ?? empty()) as number[],
       cancelled:   ((d as { cancelled?: number[] })?.cancelled   ?? empty()) as number[],
+      sifatsiz:    ((d as { sifatsiz?: number[] })?.sifatsiz     ?? empty()) as number[],
     });
     const result: Record<string, DataMap> = {
       target: buildTarget(),
@@ -178,7 +182,7 @@ export default function KunlikPage() {
       const d = customSegmentQueries[idx]?.data?.data;
       result[String(sec.id)] = d ? buildCustom(d as never) : {
         budget: empty(), leads: empty(), qual_leads: empty(), meetings: empty(),
-        deals: empty(), deals_sum: empty(), sales_count: empty(), sales_sum: empty(), cancelled: empty(),
+        deals: empty(), deals_sum: empty(), sales_count: empty(), sales_sum: empty(), cancelled: empty(), sifatsiz: empty(),
       };
     });
     return result;
@@ -188,7 +192,7 @@ export default function KunlikPage() {
   const overrides = (qPlan.data?.overrides ?? {}) as Record<string, Partial<Record<string, Record<number, number>>>>;
 
   function cellValue(src: Section, metric: MetricDef, i: number): number {
-    const b   = autoData[src] ?? { budget: [], leads: [], qual_leads: [], meetings: [], deals: [], deals_sum: [], sales_count: [], sales_sum: [], cancelled: [] };
+    const b   = autoData[src] ?? { budget: [], leads: [], qual_leads: [], meetings: [], deals: [], deals_sum: [], sales_count: [], sales_sum: [], cancelled: [], sifatsiz: [] };
     const ov  = overrides[src]?.[metric.key];
     const day = i + 1;
     if (!metric.computed && ov?.[day] !== undefined) return ov[day];
@@ -207,6 +211,7 @@ export default function KunlikPage() {
       case "sales_count": return field("sales_count", b.sales_count);
       case "sales_sum":   return field("sales_sum",   b.sales_sum);
       case "cancelled":   return field("cancelled",   b.cancelled);
+      case "sifatsiz":    return field("sifatsiz",    b.sifatsiz);
       case "roas": {
         const bg = field("budget", b.budget), s = field("sales_sum", b.sales_sum);
         return bg > 0 ? (s / bg) * 100 : 0;

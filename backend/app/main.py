@@ -625,6 +625,8 @@ _SIFATLI_STAGES = [
 ]
 # "Bekor bo'ldi" — a subset of sifatli (the lead qualified, then cancelled).
 _BEKOR_STAGES = ["UC_NAZK5J", "JUNK"]
+# "Sifatsiz" — the lead was disqualified (junk / not a real prospect).
+_SIFATSIZ_STAGES = ["UC_F8K4GI"]
 
 
 def _classify_source(utm_source, source_id=None):
@@ -748,7 +750,7 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
     since = f"{year}-{month_num:02d}-01"
     until = f"{year}-{month_num:02d}-{days_in_month:02d}"
 
-    _METRICS = ["leads", "qual_leads", "meetings", "deals", "deals_sum", "sales_count", "sales_sum", "cancelled"]
+    _METRICS = ["leads", "qual_leads", "meetings", "deals", "deals_sum", "sales_count", "sales_sum", "cancelled", "sifatsiz"]
     result = {"target": {m: [0.0] * days_in_month for m in _METRICS}}
     result["unmatched"] = {"sales_count": [0.0] * days_in_month, "sales_sum": [0.0] * days_in_month}
 
@@ -797,6 +799,7 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
         lead_params: dict = {
             "since": since, "until": until,
             "sifatli": _SIFATLI_STAGES, "bekor": _BEKOR_STAGES,
+            "sifatsiz": _SIFATSIZ_STAGES,
         }
         if resp_ids:
             lead_params["resp_ids"] = resp_ids
@@ -810,7 +813,9 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
                                       OR (dp.deal_id IS NOT NULL AND ds.bitrix_id = ANY(:sifatli))
                                     THEN fl.id END) AS qual_leads,
                 COUNT(DISTINCT CASE WHEN s.bitrix_id = ANY(:bekor) OR ds.bitrix_id = ANY(:bekor)
-                                    THEN fl.id END) AS cancelled
+                                    THEN fl.id END) AS cancelled,
+                COUNT(DISTINCT CASE WHEN s.bitrix_id = ANY(:sifatsiz) OR ds.bitrix_id = ANY(:sifatsiz)
+                                    THEN fl.id END) AS sifatsiz
             FROM facebook_leads fl
             LEFT JOIN lead_phones lp
               ON RIGHT(REGEXP_REPLACE(lp.phone, '[^0-9]', '', 'g'), 9)
@@ -832,13 +837,14 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
         # Note: no "AND fl.campaign_name IS NOT NULL" — /creatives counts
         # campaign-less FB leads too (as 'N/A'), so adding that filter would
         # break the "all targetologs" case.
-        for day, leads, qual_leads, cancelled in conn.execute(lead_sql, lead_params):
+        for day, leads, qual_leads, cancelled, sifatsiz in conn.execute(lead_sql, lead_params):
             if day is None or day < 1 or day > days_in_month:
                 continue
             idx = int(day) - 1
             result["target"]["leads"][idx]      += int(leads)
             result["target"]["qual_leads"][idx] += int(qual_leads)
             result["target"]["cancelled"][idx]  += int(cancelled)
+            result["target"]["sifatsiz"][idx]   += int(sifatsiz)
 
         # ── DEAL metrics (meetings, shartnoma) by date_create ───────────
         deal_params: dict = {"since": since, "until": until, "src": TARGET_SRC}
@@ -1123,7 +1129,7 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
             result["unmatched"]["sales_sum"][int(day) - 1] += float(opp)
 
     # Convert float arrays to int where appropriate
-    int_keys = {"leads", "qual_leads", "meetings", "deals", "sales_count", "cancelled"}
+    int_keys = {"leads", "qual_leads", "meetings", "deals", "sales_count", "cancelled", "sifatsiz"}
     for sec in result.values():
         for k in int_keys:
             if k in sec:
@@ -1346,7 +1352,7 @@ def api_marketing_kunlik_segment(section_id: int, month: str, year: int, respons
     resp_filter_lead = "AND l.responsible_id = ANY(:resp_ids)" if resp_ids else ""
     resp_filter_deal = "AND d.responsible_id = ANY(:resp_ids)" if resp_ids else ""
 
-    _METRICS = ["leads", "qual_leads", "meetings", "deals", "deals_sum", "sales_count", "sales_sum", "cancelled"]
+    _METRICS = ["leads", "qual_leads", "meetings", "deals", "deals_sum", "sales_count", "sales_sum", "cancelled", "sifatsiz"]
     result = {m: [0.0] * days_in_month for m in _METRICS}
 
     _QUAL_STAGES = {"IN_PROCESS", "PROCESSED", "UC_1KPATX", "UC_Q2U9EL", "UC_KXC3ZW", "UC_L28G68", "CONVERTED"}
@@ -1378,6 +1384,8 @@ def api_marketing_kunlik_segment(section_id: int, month: str, year: int, respons
                     result["qual_leads"][idx] += int(cnt)
                 if stage_bid in _CANCEL_STAGES:
                     result["cancelled"][idx] += int(cnt)
+                if stage_bid in _SIFATSIZ_STAGES:
+                    result["sifatsiz"][idx] += int(cnt)
 
         # ── Deal metrics: leads+qual_leads=total deals, meetings, shartnoma
         if deal_col and source_names:
@@ -1450,7 +1458,7 @@ def api_marketing_kunlik_segment(section_id: int, month: str, year: int, respons
                     continue
                 result["sales_sum"][int(day) - 1] += float(opp)
 
-    int_keys = {"leads", "qual_leads", "meetings", "deals", "sales_count", "cancelled"}
+    int_keys = {"leads", "qual_leads", "meetings", "deals", "sales_count", "cancelled", "sifatsiz"}
     for k in int_keys:
         result[k] = [int(v) for v in result[k]]
 

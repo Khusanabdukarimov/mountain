@@ -41,6 +41,7 @@ export type KunlikRow = {
   sales_count: number[];
   sales_sum: number[];
   cancelled: number[];
+  sifatsiz: number[];
 };
 
 export type UnmatchedRow = {
@@ -130,6 +131,7 @@ export type KunlikSegmentResponse = {
     sales_count: number[];
     sales_sum: number[];
     cancelled: number[];
+    sifatsiz: number[];
   };
 };
 
