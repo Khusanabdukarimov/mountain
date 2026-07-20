@@ -720,6 +720,7 @@ function CreateSectionModal({ onClose, onCreated }: { onClose: () => void; onCre
     "UC_P8729J",   // Tavsiya orqali (NPS)
     "UC_89FPH6",   // Target
     "REPEAT_SALE", // Website forma
+    "CALL",        // Qo'ng'iroq (Звонок) — Bitrix telephony source
   ]);
   const options = (manbaData?.options ?? []).filter(o => ALLOWED_SOURCES.has(o.id));
 
