@@ -7,6 +7,28 @@ const { distributeLead } = require('../services/distributor');
 // Facebook va Instagram Lead Ads uchun "Target" manba (UC_89FPH6)
 const SOURCE_TARGET = 'UC_89FPH6';
 
+// Candidate phone field keys, in priority order.
+const PHONE_FIELD_KEYS = [
+  'phone_number', 'phone',
+  'telefon_raqamingizni_qoldiring!', 'номер_телефона',
+  'telefon_raqamingiz:', 'telefon_raqamingiz',
+];
+
+/**
+ * Pick the best phone from a lead-form fields object. Some forms carry BOTH
+ * Meta's built-in "Phone number" field and a free-text "Telefon raqamingiz"
+ * field — a spam/careless submission can leave one junk ("1") while the
+ * other holds a real number (e.g. Meta's field defaulted to a placeholder
+ * but the person typed their real number in the custom field, or vice
+ * versa). Prefer whichever candidate is a valid >=9-digit phone; only fall
+ * back to the first non-empty (possibly junk) value if none qualify.
+ */
+function resolvePhone(fields) {
+  const candidates = PHONE_FIELD_KEYS.map(k => fields[k]).filter(Boolean);
+  const valid = candidates.find(v => String(v).replace(/[^0-9]/g, '').length >= 9);
+  return valid || candidates[0] || null;
+}
+
 /**
  * GET /webhook/facebook
  * Facebook verification handshake.
@@ -84,9 +106,7 @@ async function createBitrixLead(leadgenId, raw, fields) {
   const utmSource = platform === 'instagram' ? 'Instagram' : 'Facebook';
   const utmMedium = raw.is_organic ? 'organic' : 'paid';
 
-  const phone = fields.phone_number || fields.phone
-    || fields['telefon_raqamingizni_qoldiring!'] || fields['номер_телефона']
-    || fields['telefon_raqamingiz:'] || fields['telefon_raqamingiz'] || null;
+  const phone = resolvePhone(fields);
   const name  = fields.full_name || fields.name
     || fields['ismingizni_qoldiring!']
     || fields['ismingiz:'] || fields['ismingiz?'] || fields['ismingiz'] || 'Facebook Lead';
@@ -249,8 +269,7 @@ async function receiveWebhook(req, res) {
             pageId           || null,
             fields.full_name || fields.name
               || fields['ismingiz:'] || fields['ismingiz?'] || fields['ismingiz'] || null,
-            fields.phone_number || fields.phone
-              || fields['telefon_raqamingiz:'] || fields['telefon_raqamingiz'] || null,
+            resolvePhone(fields),
             fields.email     || null,
             JSON.stringify(fields),
             raw.created_time ? new Date(raw.created_time) : new Date(),
