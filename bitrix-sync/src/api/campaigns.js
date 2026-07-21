@@ -4,6 +4,7 @@ const { Router } = require('express');
 const axios = require('axios');
 const pool = require('../db/pool');
 const { extractFields } = require('../services/facebook');
+const { resolvePhone } = require('../services/resolvePhone');
 
 const router = Router();
 
@@ -960,10 +961,7 @@ async function upsertLead(lead, formId, pageId) {
       fields.full_name || fields.name
         || fields['ismingizni_qoldiring!'] || fields['ismingiz:'] || fields['ismingiz?'] || fields['ismingiz']
         || null,
-      fields.phone_number || fields.phone
-        || fields['telefon_raqamingizni_qoldiring!'] || fields['номер_телефона']
-        || fields['telefon_raqamingiz:'] || fields['telefon_raqamingiz']
-        || null,
+      resolvePhone(fields),
       fields.email || null,
       JSON.stringify(fields),
       lead.created_time ? new Date(lead.created_time) : new Date(),
