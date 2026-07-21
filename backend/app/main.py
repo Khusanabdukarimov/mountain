@@ -807,12 +807,12 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
         lead_sql = _text(f"""
             SELECT
                 EXTRACT(DAY FROM (fl.created_time AT TIME ZONE 'Asia/Tashkent'))::int AS day,
-                COUNT(DISTINCT fl.id) AS leads,
+                COUNT(DISTINCT fl.phone_norm) AS leads,
                 COUNT(DISTINCT CASE WHEN (le.id     IS NOT NULL AND s.bitrix_id  = ANY(:sifatli))
                                       OR (dp.deal_id IS NOT NULL AND ds.bitrix_id = ANY(:sifatli))
-                                    THEN fl.id END) AS qual_leads,
+                                    THEN fl.phone_norm END) AS qual_leads,
                 COUNT(DISTINCT CASE WHEN s.bitrix_id = ANY(:bekor) OR ds.bitrix_id = ANY(:bekor)
-                                    THEN fl.id END) AS cancelled
+                                    THEN fl.phone_norm END) AS cancelled
             FROM facebook_leads fl
             LEFT JOIN lead_phones lp
               ON RIGHT(REGEXP_REPLACE(lp.phone, '[^0-9]', '', 'g'), 9)
@@ -827,6 +827,11 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
             LEFT JOIN deals  d  ON d.id  = dp.deal_id AND d.lead_id IS NULL
             LEFT JOIN stages ds ON ds.id = d.stage_id AND ds.entity = 'deal'
             WHERE (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date BETWEEN :since AND :until
+              -- Drop junk-phone spam ("1","7888"...) and count each PERSON once
+              -- per day (fl.phone_norm), not each raw submission (fl.id) — a
+              -- returning contact filling the form twice the same day should
+              -- count once, matching Meta's own per-day account attribution.
+              AND LENGTH(fl.phone_norm) >= 9
               {lead_campaign_filter}
               {resp_fb}
             GROUP BY 1
