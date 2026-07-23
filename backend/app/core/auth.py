@@ -195,6 +195,10 @@ def install_auth_middleware(app):
         "/api/docs",
         "/api/config",
         "/api/bitrix/",
+        # Bitrix24 Business Process "call webhook" action posts here with no
+        # way to attach our JWT — must stay public, like /api/dashboard/payments
+        # on the Node side (same reason, same pattern).
+        "/api/v1/tolov",
     )
 
     @app.middleware("http")
