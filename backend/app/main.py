@@ -1426,6 +1426,7 @@ def api_marketing_kunlik_segment(section_id: int, month: str, year: int, respons
                 JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal'
                 WHERE d.date_create::date BETWEEN :since AND :until
                   AND d.{deal_col} = ANY(:names)
+                  AND d.category_id = 0
                   {resp_filter_deal}
             """)
             params = {"since": since, "until": until, "names": source_names}
