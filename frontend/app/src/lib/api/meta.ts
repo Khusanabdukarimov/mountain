@@ -212,7 +212,10 @@ export type CampaignAdRow = {
   cpc: number;
   cpl: number;
   ctr: number;
+  hook_views: number;
+  thruplay_views: number;
   hook_rate: number;
+  hold_rate: number;
   visit_rate: number;
   lid_rate: number;
 };

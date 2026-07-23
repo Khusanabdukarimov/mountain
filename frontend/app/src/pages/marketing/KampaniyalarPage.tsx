@@ -666,6 +666,50 @@ const formDbStatsMap = useMemo(() => {
     return m;
   }, [formAdsetsMap, creativesQ.data, allRows]);
 
+  // Hook/Hold rate per (adset, campaign) — summed from raw view counts across
+  // all ads/platforms in that adset, then ratios recomputed (not averaged
+  // per-ad percentages, which would misweight low-impression ads).
+  const creativeMetaRaw = useMemo(() => {
+    const sums = new Map<string, { impressions: number; hookViews: number; thruplayViews: number }>();
+    for (const r of allRows) {
+      const key = `${r.adset_name}|${r.campaign_name}`;
+      const s = sums.get(key) ?? { impressions: 0, hookViews: 0, thruplayViews: 0 };
+      s.impressions   += r.impressions;
+      s.hookViews     += r.hook_views;
+      s.thruplayViews += r.thruplay_views;
+      sums.set(key, s);
+    }
+    return sums;
+  }, [allRows]);
+
+  function ratesFor(key: string) {
+    const s = creativeMetaRaw.get(key);
+    if (!s) return { hook_rate: 0, hold_rate: 0 };
+    return {
+      hook_rate: s.impressions ? Math.round((s.hookViews / s.impressions) * 10000) / 100 : 0,
+      hold_rate: s.hookViews   ? Math.round((s.thruplayViews / s.hookViews) * 10000) / 100 : 0,
+    };
+  }
+
+  function ratesForRows(rows: { adset_name: string; campaign_name: string }[]) {
+    let impressions = 0, hookViews = 0, thruplayViews = 0;
+    const seen = new Set<string>();
+    for (const r of rows) {
+      const key = `${r.adset_name}|${r.campaign_name}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const s = creativeMetaRaw.get(key);
+      if (!s) continue;
+      impressions   += s.impressions;
+      hookViews     += s.hookViews;
+      thruplayViews += s.thruplayViews;
+    }
+    return {
+      hook_rate: impressions ? Math.round((hookViews / impressions) * 10000) / 100 : 0,
+      hold_rate: hookViews   ? Math.round((thruplayViews / hookViews) * 10000) / 100 : 0,
+    };
+  }
+
   // Hide forms with no activity in the selected period (0 leads AND $0 spend AND
   // 0 clicks) — a date filter should only surface forms that actually ran/produced
   // leads that period, not every ACTIVE form the account has ever created.
@@ -1186,12 +1230,11 @@ const formDbStatsMap = useMemo(() => {
                   meta_leads:         rows.reduce((a, r) => a + r.meta_leads, 0),
                   in_bitrix:          rows.reduce((a, r) => a + r.in_bitrix, 0),
                   sifatli:            rows.reduce((a, r) => a + r.sifatli, 0),
-                  konsultatsiya_otdi: rows.reduce((a, r) => a + (r.konsultatsiya_otdi ?? 0), 0),
                   sotuv_boldi:        rows.reduce((a, r) => a + (r.sotuv_boldi ?? 0), 0),
                   sotuv_sum:          rows.reduce((a, r) => a + (r.sotuv_sum ?? 0), 0),
                   sifatsiz:           rows.reduce((a, r) => a + r.sifatsiz, 0),
                   bekor_boldi:        rows.reduce((a, r) => a + r.bekor_boldi, 0),
-                  not_in_bitrix:      rows.reduce((a, r) => a + r.not_in_bitrix, 0),
+                  ...ratesForRows(rows),
                 });
 
                 const TH = "px-3 py-2.5 text-left text-[10px] font-bold text-text3 tracking-wider whitespace-nowrap";
@@ -1217,12 +1260,12 @@ const formDbStatsMap = useMemo(() => {
                     "Meta Lidlar":     r.meta_leads,
                     "Bitrix24":        r.in_bitrix,
                     "Sifatli":         r.sifatli,
-                    "Konsultatsiya":   r.konsultatsiya_otdi ?? 0,
+                    "Hook Rate %":     ratesFor(`${r.adset_name}|${r.campaign_name}`).hook_rate,
+                    "Hold Rate %":     ratesFor(`${r.adset_name}|${r.campaign_name}`).hold_rate,
                     "Sotuv bo'ldi":    r.sotuv_boldi ?? 0,
                     "Sotuv summasi ($)": +(r.sotuv_sum ?? 0).toFixed(2),
                     "Sifatsiz":        r.sifatsiz,
                     "Bekor":           r.bekor_boldi,
-                    "Yo'q":            r.not_in_bitrix,
                     "Sifat %":         r.sifat_rate,
                   }));
                   rows.push({
@@ -1233,12 +1276,12 @@ const formDbStatsMap = useMemo(() => {
                     "Meta Lidlar":     totals.meta_leads,
                     "Bitrix24":        totals.in_bitrix,
                     "Sifatli":         totals.sifatli,
-                    "Konsultatsiya":   totals.konsultatsiya_otdi,
+                    "Hook Rate %":     totals.hook_rate,
+                    "Hold Rate %":     totals.hold_rate,
                     "Sotuv bo'ldi":    totals.sotuv_boldi,
                     "Sotuv summasi ($)": +totals.sotuv_sum.toFixed(2),
                     "Sifatsiz":        totals.sifatsiz,
                     "Bekor":           totals.bekor_boldi,
-                    "Yo'q":            totals.not_in_bitrix,
                     "Sifat %":         0,
                   });
                   const ws = XLSX.utils.json_to_sheet(rows);
@@ -1276,12 +1319,12 @@ const formDbStatsMap = useMemo(() => {
                           <th className={`${TH} text-right`}>META LIDLAR</th>
                           <th className={`${TH} text-right`}>BITRIX24</th>
                           <th className={`${TH} text-right`}>SIFATLI</th>
-                          <th className={`${TH} text-right`}>KONSULT.</th>
+                          <th className={`${TH} text-right`}>HOOK RATE</th>
+                          <th className={`${TH} text-right`}>HOLD RATE</th>
                           <th className={`${TH} text-right`}>SOTUV BO'LDI</th>
                           <th className={`${TH} text-right`}>SOTUV SUMMASI</th>
                           <th className={`${TH} text-right`}>SIFATSIZ</th>
                           <th className={`${TH} text-right`}>BEKOR</th>
-                          <th className={`${TH} text-right`}>YO'Q</th>
                           <th className={`${TH} text-right`}>SIFAT %</th>
                         </tr>
                       </thead>
@@ -1301,6 +1344,7 @@ const formDbStatsMap = useMemo(() => {
                           const isExpAd    = expandedCreative === adKey;
                           const isExpSotuv = expandedSotuv    === adKey;
                           const cpl = r.meta_leads > 0 ? r.spend / r.meta_leads : 0;
+                          const rates = ratesFor(`${r.adset_name}|${r.campaign_name}`);
                           return (
                             <>
                               <tr key={ri}
@@ -1329,7 +1373,8 @@ const formDbStatsMap = useMemo(() => {
                                 <td className={`${TD} text-right text-[11px] text-text2`}>{r.meta_leads}</td>
                                 <td className={`${TD} text-right text-[11px]`}><span className={r.in_bitrix > 0 ? "text-blue" : "text-text3"}>{r.in_bitrix}</span></td>
                                 <td className={`${TD} text-right text-[11px]`}><span className={r.sifatli > 0 ? "text-green" : "text-text3"}>{r.sifatli}</span></td>
-                                <td className={`${TD} text-right text-[11px]`}><span className={(r.konsultatsiya_otdi ?? 0) > 0 ? "" : "text-text3"} style={(r.konsultatsiya_otdi ?? 0) > 0 ? { color: "#a78bfa" } : {}}>{(r.konsultatsiya_otdi ?? 0) || "—"}</span></td>
+                                <td className={`${TD} text-right text-[11px] text-text2`}>{rates.hook_rate ? `${rates.hook_rate}%` : "—"}</td>
+                                <td className={`${TD} text-right text-[11px] text-text2`}>{rates.hold_rate ? `${rates.hold_rate}%` : "—"}</td>
                                 <td className={`${TD} text-right text-[11px]`}
                                   onClick={e => {
                                     e.stopPropagation();
@@ -1349,7 +1394,6 @@ const formDbStatsMap = useMemo(() => {
                                 </td>
                                 <td className={`${TD} text-right text-[11px]`}><span className={r.sifatsiz > 0 ? "text-red/80" : "text-text3"}>{r.sifatsiz}</span></td>
                                 <td className={`${TD} text-right text-[11px]`}><span className={r.bekor_boldi > 0 ? "text-amber" : "text-text3"}>{r.bekor_boldi}</span></td>
-                                <td className={`${TD} text-right text-[11px] text-text3`}>{r.not_in_bitrix || "—"}</td>
                                 <td className={TD}><SifatBar rate={r.sifat_rate} /></td>
                               </tr>
                               {isExpAd    && <CreativeLeadsPanel key={`panel-${adKey}`} adsetName={r.adset_name} month={month} year={year} from={fromDate} to={toDate} />}
@@ -1366,12 +1410,12 @@ const formDbStatsMap = useMemo(() => {
                             <td className={`${TD} text-right font-bold text-text2`}>{totals.meta_leads}</td>
                             <td className={`${TD} text-right font-bold text-blue`}>{totals.in_bitrix}</td>
                             <td className={`${TD} text-right font-bold text-green`}>{totals.sifatli}</td>
-                            <td className={`${TD} text-right font-bold`} style={{ color: "#a78bfa" }}>{totals.konsultatsiya_otdi}</td>
+                            <td className={`${TD} text-right font-bold text-text2`}>{totals.hook_rate ? `${totals.hook_rate}%` : "—"}</td>
+                            <td className={`${TD} text-right font-bold text-text2`}>{totals.hold_rate ? `${totals.hold_rate}%` : "—"}</td>
                             <td className={`${TD} text-right font-bold`} style={{ color: "#22c55e" }}>{totals.sotuv_boldi}</td>
                             <td className={`${TD} text-right font-bold`} style={{ color: "#22c55e" }}>{totals.sotuv_sum > 0 ? `$${Math.round(totals.sotuv_sum).toLocaleString()}` : "—"}</td>
                             <td className={`${TD} text-right text-red/80`}>{totals.sifatsiz}</td>
                             <td className={`${TD} text-right text-amber`}>{totals.bekor_boldi}</td>
-                            <td className={`${TD} text-right text-text3`}>{totals.not_in_bitrix}</td>
                             <td className={TD} />
                           </tr>
                         </tfoot>

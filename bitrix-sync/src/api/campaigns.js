@@ -181,6 +181,13 @@ function actionVal(actions, types) {
   );
 }
 
+// video_thruplay_watched_actions only ever contains thruplay counts —
+// no action_type filtering needed, unlike video_play_actions above.
+function sumActionValues(actions) {
+  if (!actions) return 0;
+  return actions.reduce((s, a) => s + parseInt(a.value || 0, 10), 0);
+}
+
 function buildRows(rawRows) {
   const bucket = new Map();
 
@@ -196,7 +203,7 @@ function buildRows(rawRows) {
         campaign_name: '', adset_name: '', ad_name: '', objective: '', platform,
         spend: 0, impressions: 0, reach: 0, freq_w: 0,
         clicks: 0, unique_clicks: 0, link_clicks: 0,
-        leads: 0, lpv: 0, v3: 0,
+        leads: 0, lpv: 0, v3: 0, thruplay: 0,
       });
     }
 
@@ -216,6 +223,7 @@ function buildRows(rawRows) {
     b.leads        += actionVal(r.actions, LEAD_TYPES);
     b.lpv          += actionVal(r.actions, LPV_TYPES);
     b.v3           += actionVal(r.video_play_actions, V3_TYPES);
+    b.thruplay     += sumActionValues(r.video_thruplay_watched_actions);
   }
 
   const LEADS_OBJECTIVES = new Set(['OUTCOME_LEADS', 'LEAD_GENERATION']);
@@ -242,7 +250,10 @@ function buildRows(rawRows) {
       cpc:                 clicks ? round2(spend / clicks)      : 0,
       cpl:                 leads  ? round2(spend / leads)       : 0,
       ctr:                 impr   ? round2(clicks / impr * 100) : 0,
+      hook_views:          b.v3,
+      thruplay_views:      b.thruplay,
       hook_rate:           impr   ? round2(b.v3  / impr * 100) : 0,
+      hold_rate:           b.v3   ? round2(b.thruplay / b.v3 * 100) : 0,
       visit_rate:          link   ? round2(b.lpv / link * 100) : 0,
       lid_rate:            link   ? round2(leads / link * 100) : 0,
     });
@@ -523,7 +534,7 @@ router.get('/rows', async (req, res) => {
       'campaign_id', 'campaign_name', 'adset_id', 'adset_name', 'ad_id', 'ad_name',
       'objective', 'spend', 'impressions', 'reach', 'frequency',
       'clicks', 'unique_clicks', 'inline_link_clicks',
-      'cpm', 'cpc', 'ctr', 'actions', 'video_play_actions',
+      'cpm', 'cpc', 'ctr', 'actions', 'video_play_actions', 'video_thruplay_watched_actions',
     ].join(',');
 
     // Fetch from all configured ad accounts independently — one failure doesn't block others
