@@ -173,7 +173,6 @@ const LEAD_TYPES = new Set([
   'lead',
 ]);
 const LPV_TYPES = new Set(['landing_page_view']);
-const V3_TYPES  = new Set(['video_view', 'video_3sec_watched_actions']);
 
 function actionVal(actions, types) {
   if (!actions) return 0;
@@ -183,8 +182,9 @@ function actionVal(actions, types) {
   );
 }
 
-// video_thruplay_watched_actions only ever contains thruplay counts —
-// no action_type filtering needed, unlike video_play_actions above.
+// video_3_sec_watched_actions / video_thruplay_watched_actions each only
+// ever contain their own counts — no action_type filtering needed, unlike
+// the generic `actions` field above.
 function sumActionValues(actions) {
   if (!actions) return 0;
   return actions.reduce((s, a) => s + parseInt(a.value || 0, 10), 0);
@@ -224,7 +224,7 @@ function buildRows(rawRows) {
     b.link_clicks  += parseInt(r.inline_link_clicks || 0, 10);
     b.leads        += actionVal(r.actions, LEAD_TYPES);
     b.lpv          += actionVal(r.actions, LPV_TYPES);
-    b.v3           += actionVal(r.video_play_actions, V3_TYPES);
+    b.v3           += sumActionValues(r.video_3_sec_watched_actions);
     b.thruplay     += sumActionValues(r.video_thruplay_watched_actions);
   }
 
@@ -536,7 +536,7 @@ router.get('/rows', async (req, res) => {
       'campaign_id', 'campaign_name', 'adset_id', 'adset_name', 'ad_id', 'ad_name',
       'objective', 'spend', 'impressions', 'reach', 'frequency',
       'clicks', 'unique_clicks', 'inline_link_clicks',
-      'cpm', 'cpc', 'ctr', 'actions', 'video_play_actions', 'video_thruplay_watched_actions',
+      'cpm', 'cpc', 'ctr', 'actions', 'video_3_sec_watched_actions', 'video_thruplay_watched_actions',
     ].join(',');
 
     // Fetch from all configured ad accounts independently — one failure doesn't block others
@@ -1604,7 +1604,7 @@ async function syncMetaAdDaily(sinceStr, untilStr) {
         if (whitelist) filtering.push({ field: 'campaign.id', operator: 'IN', value: whitelist });
         const rows = await paginate(`${BASE}/${acct}/insights`, {
           access_token:   token(),
-          fields:         'campaign_id,campaign_name,adset_id,adset_name,objective,spend,impressions,clicks,inline_link_clicks,actions,video_play_actions,video_thruplay_watched_actions',
+          fields:         'campaign_id,campaign_name,adset_id,adset_name,objective,spend,impressions,clicks,inline_link_clicks,actions,video_3_sec_watched_actions,video_thruplay_watched_actions',
           time_increment: 1,
           level:          'adset',
           breakdowns:     'publisher_platform',
@@ -1643,7 +1643,7 @@ async function syncMetaAdDaily(sinceStr, untilStr) {
             parseInt(r.clicks || 0, 10),
             actionVal(r.actions, LEAD_TYPES),
             parseInt(r.inline_link_clicks || 0, 10),
-            actionVal(r.video_play_actions, V3_TYPES),
+            sumActionValues(r.video_3_sec_watched_actions),
             sumActionValues(r.video_thruplay_watched_actions),
           ]);
         }
