@@ -119,6 +119,8 @@ pool.query(`
   );
   CREATE INDEX IF NOT EXISTS idx_mad_date     ON meta_ad_daily(date);
   CREATE INDEX IF NOT EXISTS idx_mad_campaign ON meta_ad_daily(campaign_name);
+  ALTER TABLE meta_ad_daily ADD COLUMN IF NOT EXISTS hook_views     INTEGER DEFAULT 0;
+  ALTER TABLE meta_ad_daily ADD COLUMN IF NOT EXISTS thruplay_views INTEGER DEFAULT 0;
 `).catch(err => console.error('[campaigns] meta_ad_daily init:', err.message));
 
 pool.query(`
@@ -1302,11 +1304,18 @@ router.get('/creatives', async (req, res) => {
       }
     }
 
-    // 2. Spend per adset+campaign from meta_ad_daily (date range aware).
+    // 2. Spend + hook/hold rate per adset+campaign from meta_ad_daily (date
+    // range aware, not restricted to campaigns created within the selected
+    // month — unlike /api/campaigns/rows, so older-but-still-active
+    // campaigns aren't silently dropped).
     // Grouping by adset_name alone would double-count spend when the same
     // adset_name is reused across multiple campaigns.
     const { rows: cacheRows } = await pool.query(`
-      SELECT adset_name, campaign_name, SUM(spend)::numeric AS spend
+      SELECT adset_name, campaign_name,
+             SUM(spend)::numeric          AS spend,
+             SUM(impressions)::bigint     AS impressions,
+             SUM(hook_views)::bigint      AS hook_views,
+             SUM(thruplay_views)::bigint  AS thruplay_views
       FROM meta_ad_daily
       WHERE date >= $1::date AND date <= $2::date
         AND adset_name IS NOT NULL
@@ -1314,7 +1323,21 @@ router.get('/creatives', async (req, res) => {
     `, [since, until]);
 
     const spendMap = {};
-    for (const r of cacheRows) spendMap[`${r.adset_name}|${r.campaign_name}`] = parseFloat(r.spend) || 0;
+    const rateMap = {};
+    for (const r of cacheRows) {
+      const key = `${r.adset_name}|${r.campaign_name}`;
+      spendMap[key] = parseFloat(r.spend) || 0;
+      const impr = parseInt(r.impressions, 10) || 0;
+      const hookViews = parseInt(r.hook_views, 10) || 0;
+      const thruplayViews = parseInt(r.thruplay_views, 10) || 0;
+      rateMap[key] = {
+        impressions: impr,
+        hook_views: hookViews,
+        thruplay_views: thruplayViews,
+        hook_rate: impr ? round2(hookViews / impr * 100) : 0,
+        hold_rate: hookViews ? round2(thruplayViews / hookViews * 100) : 0,
+      };
+    }
 
     // 3. Creative name cache
     const adIds = qualRows.map(r => r.ad_id).filter(Boolean);
@@ -1339,6 +1362,11 @@ router.get('/creatives', async (req, res) => {
       ads_manager_url: cr.ads_manager_url || null,
       creative_platform: cr.creative_platform || null,
       spend:         spendMap[`${r.adset_name}|${r.campaign_name}`] ?? 0,
+      impressions:      rateMap[`${r.adset_name}|${r.campaign_name}`]?.impressions ?? 0,
+      hook_views:        rateMap[`${r.adset_name}|${r.campaign_name}`]?.hook_views ?? 0,
+      thruplay_views:    rateMap[`${r.adset_name}|${r.campaign_name}`]?.thruplay_views ?? 0,
+      hook_rate:     rateMap[`${r.adset_name}|${r.campaign_name}`]?.hook_rate ?? 0,
+      hold_rate:     rateMap[`${r.adset_name}|${r.campaign_name}`]?.hold_rate ?? 0,
       meta_leads:    r.meta_leads,
       in_bitrix:     r.in_bitrix,
       not_in_bitrix: r.not_in_bitrix,
@@ -1576,7 +1604,7 @@ async function syncMetaAdDaily(sinceStr, untilStr) {
         if (whitelist) filtering.push({ field: 'campaign.id', operator: 'IN', value: whitelist });
         const rows = await paginate(`${BASE}/${acct}/insights`, {
           access_token:   token(),
-          fields:         'campaign_id,campaign_name,adset_id,adset_name,objective,spend,impressions,clicks,inline_link_clicks,actions',
+          fields:         'campaign_id,campaign_name,adset_id,adset_name,objective,spend,impressions,clicks,inline_link_clicks,actions,video_play_actions,video_thruplay_watched_actions',
           time_increment: 1,
           level:          'adset',
           breakdowns:     'publisher_platform',
@@ -1590,8 +1618,8 @@ async function syncMetaAdDaily(sinceStr, untilStr) {
           await pool.query(`
             INSERT INTO meta_ad_daily
               (date, adset_id, adset_name, campaign_id, campaign_name, platform, objective,
-               spend, impressions, clicks, leads, link_clicks)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+               spend, impressions, clicks, leads, link_clicks, hook_views, thruplay_views)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
             ON CONFLICT (date, adset_id, platform) DO UPDATE SET
               adset_name    = EXCLUDED.adset_name,
               campaign_id   = EXCLUDED.campaign_id,
@@ -1602,6 +1630,8 @@ async function syncMetaAdDaily(sinceStr, untilStr) {
               clicks        = EXCLUDED.clicks,
               leads         = EXCLUDED.leads,
               link_clicks   = EXCLUDED.link_clicks,
+              hook_views    = EXCLUDED.hook_views,
+              thruplay_views = EXCLUDED.thruplay_views,
               updated_at    = NOW()
           `, [
             r.date_start,
@@ -1613,6 +1643,8 @@ async function syncMetaAdDaily(sinceStr, untilStr) {
             parseInt(r.clicks || 0, 10),
             actionVal(r.actions, LEAD_TYPES),
             parseInt(r.inline_link_clicks || 0, 10),
+            actionVal(r.video_play_actions, V3_TYPES),
+            sumActionValues(r.video_thruplay_watched_actions),
           ]);
         }
         console.log(`[meta_ad_daily] acct=${acct} synced ${rows.length} rows (${sinceStr} → ${untilStr})`);

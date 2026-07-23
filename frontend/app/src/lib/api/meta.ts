@@ -325,6 +325,11 @@ export type CreativeRow = {
   ad_name:       string | null;
   post_url:      string | null;
   spend:         number;
+  impressions:   number;
+  hook_views:    number;
+  thruplay_views: number;
+  hook_rate:     number;
+  hold_rate:     number;
   meta_leads:    number;
   in_bitrix:     number;
   not_in_bitrix: number;
