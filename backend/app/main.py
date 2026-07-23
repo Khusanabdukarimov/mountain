@@ -937,10 +937,10 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
             # Targetolog filtered: only FB-attributed deals for selected campaigns
             sale_sql = _text(f"""
                 SELECT
-                    EXTRACT(DAY FROM d.uf_bp_sale_date AT TIME ZONE 'Asia/Tashkent')::int AS day
+                    EXTRACT(DAY FROM COALESCE(d.uf_bp_sale_date, d.uf_payment_date, d.date_create) AT TIME ZONE 'Asia/Tashkent')::int AS day
                 FROM deals d
                 JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
-                WHERE d.uf_bp_sale_date::date BETWEEN :since AND :until
+                WHERE COALESCE(d.uf_bp_sale_date, d.uf_payment_date, d.date_create)::date BETWEEN :since AND :until
                   {resp_deal}
                   AND (
                     EXISTS (
@@ -1027,10 +1027,10 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
             # No targetolog filter: all won Target deals (matched + unmatched)
             sale_sql = _text(f"""
                 SELECT
-                    EXTRACT(DAY FROM d.uf_bp_sale_date AT TIME ZONE 'Asia/Tashkent')::int AS day
+                    EXTRACT(DAY FROM COALESCE(d.uf_bp_sale_date, d.uf_payment_date, d.date_create) AT TIME ZONE 'Asia/Tashkent')::int AS day
                 FROM deals d
                 JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
-                WHERE d.uf_bp_sale_date::date BETWEEN :since AND :until
+                WHERE COALESCE(d.uf_bp_sale_date, d.uf_payment_date, d.date_create)::date BETWEEN :since AND :until
                   AND d.source_id = :src
                   {resp_deal}
             """)
@@ -1072,10 +1072,10 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
             unmatched_params["resp_ids"] = resp_ids
         unmatched_sql = _text(f"""
             SELECT
-                EXTRACT(DAY FROM d.uf_bp_sale_date AT TIME ZONE 'Asia/Tashkent')::int AS day
+                EXTRACT(DAY FROM COALESCE(d.uf_bp_sale_date, d.uf_payment_date, d.date_create) AT TIME ZONE 'Asia/Tashkent')::int AS day
             FROM deals d
             JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
-            WHERE d.uf_bp_sale_date::date BETWEEN :since AND :until
+            WHERE COALESCE(d.uf_bp_sale_date, d.uf_payment_date, d.date_create)::date BETWEEN :since AND :until
               AND d.source_id = :src
               {resp_deal}
               AND NOT EXISTS (
@@ -1451,11 +1451,12 @@ def api_marketing_kunlik_segment(section_id: int, month: str, year: int, respons
         # ── Sales metrics: won deals by uf_bp_sale_date (count) + deal_payments (sum) ──
         if deal_col and source_names:
             sales_sql = _text(f"""
-                SELECT EXTRACT(DAY FROM d.uf_bp_sale_date AT TIME ZONE 'Asia/Tashkent')::int AS day
+                SELECT EXTRACT(DAY FROM COALESCE(d.uf_bp_sale_date, d.uf_payment_date, d.date_create) AT TIME ZONE 'Asia/Tashkent')::int AS day
                 FROM deals d
                 JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
-                WHERE d.uf_bp_sale_date::date BETWEEN :since AND :until
+                WHERE COALESCE(d.uf_bp_sale_date, d.uf_payment_date, d.date_create)::date BETWEEN :since AND :until
                   AND d.{deal_col} = ANY(:names)
+                  AND d.category_id = 0
                   {resp_filter_deal}
             """)
             sales_payment_sql = _text(f"""
@@ -1467,6 +1468,7 @@ def api_marketing_kunlik_segment(section_id: int, month: str, year: int, respons
                     JOIN deal_payments p ON p.deal_id = d.id
                     WHERE p.paid_at::date BETWEEN :since AND :until
                       AND d.{deal_col} = ANY(:names)
+                      AND d.category_id = 0
                       {resp_filter_deal}
                     UNION ALL
                     SELECT EXTRACT(DAY FROM COALESCE(d.uf_bp_sale_date, d.uf_payment_date, d.date_create) AT TIME ZONE 'Asia/Tashkent')::int AS day,
@@ -1475,6 +1477,7 @@ def api_marketing_kunlik_segment(section_id: int, month: str, year: int, respons
                     JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
                     WHERE COALESCE(d.uf_bp_sale_date, d.uf_payment_date, d.date_create)::date BETWEEN :since AND :until
                       AND d.{deal_col} = ANY(:names)
+                      AND d.category_id = 0
                       {resp_filter_deal}
                       AND d.uf_paid_sum IS NOT NULL AND d.uf_paid_sum > 0
                       AND d.id NOT IN (SELECT DISTINCT deal_id FROM deal_payments)
@@ -1548,7 +1551,7 @@ def api_marketing_kunlik_jami_stats(month: str, year: int, responsible_id: str =
             SELECT
                 (SELECT COUNT(*) FROM deals d
                  JOIN stages s ON s.id = d.stage_id AND s.entity = 'deal' AND s.is_won = true
-                 WHERE d.uf_bp_sale_date::date BETWEEN :since AND :until
+                 WHERE COALESCE(d.uf_bp_sale_date, d.uf_payment_date, d.date_create)::date BETWEEN :since AND :until
                  {resp_deal})                                                               AS total_sales,
                 COALESCE((
                     SELECT SUM(sub.amount) FROM (
