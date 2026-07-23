@@ -891,6 +891,7 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
             LEFT JOIN leads l_deal ON l_deal.id = d.lead_id
             WHERE d.date_create::date BETWEEN :since AND :until
               AND d.source_id = :src
+              AND d.category_id = 0
               {deal_campaign_filter}
               {resp_deal}
         """)
@@ -901,8 +902,10 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
             # NB: open deals must NOT be added to qual_leads — "Maqsadli lidlar
             # soni" counts leads, and every open deal here already comes from a
             # lead that the query above counted.
-            if stage_bid == "NEW":
-                result["target"]["meetings"][idx] += 1
+            # Every deal in this pipeline (category_id=0) is created AT the
+            # "Uchrashuv o'tkazildi" stage, so any deal that exists — regardless
+            # of its current stage — already had its meeting counted once.
+            result["target"]["meetings"][idx] += 1
             if stage_bid == "UC_W35V62" or is_won:
                 result["target"]["deals"][idx] += 1
                 result["target"]["deals_sum"][idx] += float(opp)
@@ -1437,8 +1440,10 @@ def api_marketing_kunlik_segment(section_id: int, month: str, year: int, respons
                 idx = int(day) - 1
                 result["leads"][idx] += 1       # lidlar soni = deal count
                 result["qual_leads"][idx] += 1  # maqsadli lidlar = deal count
-                if stage_bid == "NEW":
-                    result["meetings"][idx] += 1
+                # Every deal in this pipeline (category_id=0) is created AT the
+                # "Uchrashuv o'tkazildi" stage, so any deal that exists — regardless
+                # of its current stage — already had its meeting counted once.
+                result["meetings"][idx] += 1
                 if stage_bid == "UC_W35V62" or is_won:
                     result["deals"][idx] += 1
                     result["deals_sum"][idx] += float(opp)
