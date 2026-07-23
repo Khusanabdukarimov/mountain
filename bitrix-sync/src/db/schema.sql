@@ -45,6 +45,8 @@ CREATE TABLE IF NOT EXISTS leads (
   uf_with_whom    TEXT,
   uf_tashrif_sanasi TEXT,
   uf_amo_date     TIMESTAMPTZ,
+  uf_junk_reason   TEXT,   -- sifatsiz (UC_F8K4GI) reason, decoded label
+  uf_cancel_reason TEXT,   -- bekor bo'ldi (UC_NAZK5J) reason, decoded label
   name            TEXT,
   last_name       TEXT,
   title           TEXT,

@@ -277,6 +277,8 @@ export interface FormLead {
   bitrix_id: number | null;
   stage_name: string | null;
   stage_code: string | null;
+  junk_reason: string | null;    // sifatsiz sabab (from Bitrix)
+  cancel_reason: string | null;  // bekor bo'lish sababi (from Bitrix)
   utm_source: string;
   utm_medium: string;
   utm_campaign: string;

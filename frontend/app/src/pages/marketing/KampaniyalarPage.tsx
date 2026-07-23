@@ -203,7 +203,7 @@ function LeadsSubTable({ formId, campaignId, from, to, campaignName }: { formId:
       <table className="w-full text-[11px]">
         <thead>
           <tr className="text-text3 border-b border-border/20">
-            {["#", "Lid nomi", "Telefon", "Bosqich", "Sana", "Bitrix24"].map(h => (
+            {["#", "Lid nomi", "Telefon", "Bosqich", "Sabab", "Sana", "Bitrix24"].map(h => (
               <th key={h} className="text-left px-4 py-1.5 font-medium">{h}</th>
             ))}
           </tr>
@@ -232,6 +232,21 @@ function LeadsSubTable({ formId, campaignId, from, to, campaignName }: { formId:
                       <span className="text-text3 italic text-[10.5px]">Bitrix24 da yo'q</span>
                     )}
                   </td>
+                  <td className="px-4 py-2">
+                    {(() => {
+                      // Show the sifatsiz reason for junk leads, the bekor reason
+                      // for cancelled ones (only one is ever set per lead).
+                      const reason = l.junk_reason || l.cancel_reason;
+                      if (!reason) return <span className="text-text3/50">—</span>;
+                      const isJunk = !!l.junk_reason;
+                      const c = isJunk ? "#ef4444" : "#f59e0b";
+                      return (
+                        <span className="text-[10.5px] font-medium px-1.5 py-0.5 rounded" style={{ color: c, background: c + "1f" }}>
+                          {reason}
+                        </span>
+                      );
+                    })()}
+                  </td>
                   <td className="px-4 py-2 text-text3">
                     {l.created_at ? new Date(l.created_at).toLocaleDateString("ru-RU") : "—"}
                   </td>
@@ -252,7 +267,7 @@ function LeadsSubTable({ formId, campaignId, from, to, campaignName }: { formId:
                 </tr>
                 {isOpen && (
                   <tr key={`${l.id}-detail`} className="bg-bg3/30 border-b border-border/20">
-                    <td colSpan={6} className="px-6 py-3">
+                    <td colSpan={7} className="px-6 py-3">
                       {fieldEntries.length === 0 ? (
                         <span className="text-text3 italic">Ma'lumot yo'q</span>
                       ) : (

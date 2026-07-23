@@ -1115,10 +1115,13 @@ router.get('/leads', async (req, res) => {
         fl.created_time, fl.field_data, fl.platform, fl.is_organic,
         b.bitrix_lead_id,
         b.stage_name,
-        b.stage_code
+        b.stage_code,
+        b.junk_reason,
+        b.cancel_reason
       FROM facebook_leads fl
       LEFT JOIN LATERAL (
-        SELECT l.id AS bitrix_lead_id, s.name AS stage_name, s.bitrix_id AS stage_code
+        SELECT l.id AS bitrix_lead_id, s.name AS stage_name, s.bitrix_id AS stage_code,
+               l.uf_junk_reason AS junk_reason, l.uf_cancel_reason AS cancel_reason
         FROM lead_phones lp
         JOIN leads  l ON l.id = lp.lead_id
         LEFT JOIN stages s ON s.id = l.stage_id
@@ -1160,6 +1163,10 @@ router.get('/leads', async (req, res) => {
         bitrix_id:    r.bitrix_lead_id || null,
         stage_name:   r.stage_name || null,
         stage_code:   r.stage_code || null,
+        // Sifatsiz (UC_F8K4GI) / bekor (UC_NAZK5J) reason from Bitrix — already
+        // decoded to a human label at write time (services/upsertLead.js).
+        junk_reason:   r.junk_reason || null,
+        cancel_reason: r.cancel_reason || null,
         utm_source,
         utm_medium,
         utm_campaign: r.campaign_name || '',

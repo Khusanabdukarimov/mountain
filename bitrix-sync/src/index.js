@@ -75,6 +75,11 @@ Promise.all([
   pool.query(`
     ALTER TABLE leads ADD COLUMN IF NOT EXISTS uf_amo_date TIMESTAMPTZ;
     CREATE INDEX IF NOT EXISTS leads_uf_amo_date_idx ON leads(uf_amo_date);
+    -- Sifatsiz / bekor reason (decoded label, written by services/upsertLead.js).
+    -- These exist in prod but had no migration — add idempotently so fresh DBs
+    -- and the Kampaniyalar drill-down's "Sabab" column work everywhere.
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS uf_junk_reason   TEXT;
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS uf_cancel_reason TEXT;
     ALTER TABLE deals ADD COLUMN IF NOT EXISTS date_modify      TIMESTAMPTZ;
     ALTER TABLE deals ADD COLUMN IF NOT EXISTS uf_sale_date     TIMESTAMPTZ;
     ALTER TABLE deals ADD COLUMN IF NOT EXISTS uf_bp_sale_date  TIMESTAMPTZ;
