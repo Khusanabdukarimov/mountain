@@ -76,8 +76,6 @@ function varPct(fakt: number, plan: number | undefined): number | null {
   return Math.round((fakt / plan) * 100);
 }
 
-const LS_HIDDEN_KEY = "kunlik_hidden_metrics";
-
 export default function KunlikPage() {
   const [month,        setMonth]        = useState<MonthKey>(DEFAULT_MONTH);
   const [year,         setYear]         = useState(DEFAULT_YEAR);
@@ -89,26 +87,16 @@ export default function KunlikPage() {
   const [showModal,    setShowModal]    = useState(false);
   const [filterOpen,   setFilterOpen]   = useState(false);
   const [tDropOpen,    setTDropOpen]    = useState(false);
-  const [hiddenMetrics, setHiddenMetrics] = useState<Set<MetricKey>>(() => {
-    try {
-      const s = localStorage.getItem(LS_HIDDEN_KEY);
-      return new Set(s ? JSON.parse(s) : []);
-    } catch { return new Set(); }
-  });
+  // Not persisted — every page load/refresh starts with all metrics visible.
+  const [hiddenMetrics, setHiddenMetrics] = useState<Set<MetricKey>>(new Set());
   const qc = useQueryClient();
 
   const hideMetric = useCallback((key: MetricKey) => {
-    setHiddenMetrics(prev => {
-      const next = new Set(prev);
-      next.add(key);
-      localStorage.setItem(LS_HIDDEN_KEY, JSON.stringify([...next]));
-      return next;
-    });
+    setHiddenMetrics(prev => new Set(prev).add(key));
   }, []);
 
   const restoreMetrics = useCallback(() => {
     setHiddenMetrics(new Set());
-    localStorage.removeItem(LS_HIDDEN_KEY);
   }, []);
 
   const todayDay  = now.getDate();
