@@ -153,6 +153,16 @@ Promise.all([
       console.error('[reconcile-leads] failed to schedule:', e.message);
     }
 
+    // Daily deal reconcile (01:15 Tashkent) — re-syncs deals whose
+    // ONCRMDEALADD/UPDATE webhook failed (e.g. Bitrix REST timeout), so they
+    // don't silently vanish from our mirror. Also runs once ~90s after startup.
+    try {
+      const { scheduleDailyReconcile: scheduleDealReconcile } = require('./sync/reconcileDeals');
+      scheduleDealReconcile();
+    } catch (e) {
+      console.error('[reconcile-deals] failed to schedule:', e.message);
+    }
+
     // Check Meta access token expiry on startup
     (async () => {
       try {
