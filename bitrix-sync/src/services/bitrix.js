@@ -62,10 +62,27 @@ async function fetchAll(method, filter = {}, select = []) {
   if (select.length) params.select = select;
 
   const firstUrl = buildUrl(method, params);
-  const firstPage = await httpGet(firstUrl);
+  // First page gets the same retry+backoff treatment as later pages — a wide
+  // SELECT (many UF_CRM_* fields) can legitimately take Bitrix >30s to build,
+  // and this call previously had zero retries, unlike every page after it.
+  let firstPage = null;
+  {
+    const delays = [5000, 15000, 45000];
+    for (let attempt = 0; attempt < delays.length; attempt++) {
+      try {
+        firstPage = await httpGet(firstUrl, 35000);
+        if (firstPage.result) break;
+        firstPage = null;
+        await sleep(delays[attempt]);
+      } catch (err) {
+        console.warn(`[bitrix] ${method} first page attempt=${attempt + 1} error: ${err.message}`);
+        if (attempt < delays.length - 1) await sleep(delays[attempt]);
+      }
+    }
+  }
 
-  if (!firstPage.result) {
-    console.error(`[bitrix] ${method} returned no result:`, firstPage);
+  if (!firstPage || !firstPage.result) {
+    console.error(`[bitrix] ${method} returned no result after retries`);
     return [];
   }
 
