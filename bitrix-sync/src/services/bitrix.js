@@ -3,8 +3,9 @@ const https = require('https');
 const http = require('http');
 
 const WEBHOOK_URL = process.env.BITRIX_WEBHOOK_URL;
-const PAGE_DELAY_MS = 600; // 600ms between pages ≈ 1.67 req/s (safe under 2 req/s limit)
-const MAX_CONSEC_FAILURES = 3; // abort fetchAll if this many pages fail in a row
+const PAGE_DELAY_MS = 600; // 600ms between batch calls ≈ 1.67 req/s (safe under 2 req/s limit)
+const MAX_CONSEC_FAILURES = 3; // abort fetchAll if this many chunks fail in a row
+const BATCH_SIZE = 50; // Bitrix batch max commands per call
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
@@ -96,33 +97,57 @@ async function fetchAll(method, filter = {}, select = []) {
     offsets.push(start);
   }
 
-  console.log(`[bitrix] ${method}: total=${total}, pages=${offsets.length + 1}`);
+  // Group remaining pages into Bitrix `batch` calls (up to 50 sub-requests per
+  // call) instead of one HTTP/TLS connection per page — this is the difference
+  // between e.g. 6 separate connections and 1 for a 300-record fetch. Fewer,
+  // bundled connections from our one server IP is kinder to whatever's on the
+  // other end throttling/blocking bursty traffic (see PAGE_DELAY_MS above).
+  const chunks = [];
+  for (let i = 0; i < offsets.length; i += BATCH_SIZE) {
+    chunks.push(offsets.slice(i, i + BATCH_SIZE));
+  }
+
+  console.log(`[bitrix] ${method}: total=${total}, pages=${offsets.length + 1}, batches=${chunks.length}`);
+
+  function cmdForStart(start) {
+    const qs = new URLSearchParams();
+    for (const [fk, fv] of Object.entries(filter)) qs.append(`filter[${fk}]`, fv);
+    select.forEach((f, i) => qs.append(`select[${i}]`, f));
+    qs.append('start', start);
+    return `${method}?${qs.toString()}`;
+  }
 
   let consecFailures = 0;
-  for (const start of offsets) {
+  for (const chunk of chunks) {
     await sleep(PAGE_DELAY_MS);
-    const url = buildUrl(method, { ...params, start });
+    const cmd = {};
+    chunk.forEach((start, i) => { cmd[`p${i}`] = cmdForStart(start); });
+
     let success = false;
     const delays = [5000, 15000, 45000]; // exponential backoff
     for (let attempt = 0; attempt < delays.length; attempt++) {
       try {
-        const page = await httpGet(url, 35000);
-        if (page.result) {
-          all.push(...page.result);
+        const res = await httpPost(`${WEBHOOK_URL}/batch`, { halt: 0, cmd }, 35000);
+        const batchResult = res.result && res.result.result;
+        if (batchResult) {
+          for (const key of Object.keys(cmd)) {
+            const rows = batchResult[key];
+            if (Array.isArray(rows)) all.push(...rows);
+          }
           success = true;
           break;
         }
         await sleep(delays[attempt]);
       } catch (err) {
-        console.warn(`[bitrix] page start=${start} attempt=${attempt + 1} error: ${err.message}`);
+        console.warn(`[bitrix] ${method} batch@${chunk[0]} attempt=${attempt + 1} error: ${err.message}`);
         if (attempt < delays.length - 1) await sleep(delays[attempt]);
       }
     }
     if (!success) {
       consecFailures++;
-      console.error(`[bitrix] page start=${start} failed after all retries (consec=${consecFailures})`);
+      console.error(`[bitrix] ${method} batch@${chunk[0]} failed after all retries (consec=${consecFailures})`);
       if (consecFailures >= MAX_CONSEC_FAILURES) {
-        console.error(`[bitrix] ${method}: ${consecFailures} consecutive page failures — aborting fetch, returning partial ${all.length}/${total}`);
+        console.error(`[bitrix] ${method}: ${consecFailures} consecutive batch failures — aborting fetch, returning partial ${all.length}/${total}`);
         break;
       }
     } else {
