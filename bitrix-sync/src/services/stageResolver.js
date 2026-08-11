@@ -70,13 +70,13 @@ function invalidate() {
 async function syncDealStagesFromBitrix() {
   try {
     // Get all custom pipelines; category 0 = default pipeline
-    const catRes = await bitrixCall('crm.dealcategory.list', {});
+    const catRes = await bitrixCall('crm.dealcategory.list', {}, 'stage-resolver');
     const categories = catRes.result || [];
     const categoryIds = [0, ...categories.map(c => parseInt(c.ID))];
 
     for (const catId of categoryIds) {
       // id must be a top-level param — do NOT use fetchAll (it wraps as filter[id])
-      const stagesRes = await bitrixCall('crm.dealcategory.stage.list', { id: catId });
+      const stagesRes = await bitrixCall('crm.dealcategory.stage.list', { id: catId }, 'stage-resolver');
       const stages = stagesRes.result || [];
       for (const s of stages) {
         // SEMANTICS: 'S' = won, 'F' = lost, '' = in-progress

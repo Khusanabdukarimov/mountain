@@ -1565,26 +1565,17 @@ router.get('/creative-leads', async (req, res) => {
   }
 });
 
-// Bitrix24 health check — ping server.time before a sync
 const BX_WEBHOOK = process.env.BITRIX_WEBHOOK_URL;
-async function isBitrixReachable() {
-  if (!BX_WEBHOOK) return true; // no Bitrix config, skip check
-  try {
-    const res = await axios.get(`${BX_WEBHOOK}/server.time`, { timeout: 8000 });
-    return !!res.data?.result;
-  } catch {
-    return false;
-  }
-}
 
-// Auto-sync leads every 5 minutes
+// Auto-sync leads every 5 minutes.
+//
+// This used to ping Bitrix's server.time first as a "reachability check" and
+// skip the cycle if it failed — 288 Bitrix requests/day, ~30% of all our
+// outbound traffic, to gate a sync that reads Meta and our own Postgres and
+// never touches Bitrix at all. Worse, during the Aug 5-10 IP block it kept
+// poking the portal every 5 minutes while it was blocking us. Removed.
 const SYNC_INTERVAL_MS = 5 * 60 * 1000;
 async function scheduledSync() {
-  const reachable = await isBitrixReachable();
-  if (!reachable) {
-    console.warn('[sync-leads] Bitrix24 unreachable — skipping this sync cycle');
-    return;
-  }
   syncAllLeads()
     .then(r => { if (!r.skipped) console.log(`[sync-leads] Auto-sync done: ${r.totalUpserted} upserted`); })
     .catch(err => console.error('[sync-leads] Auto-sync error:', err.message));
@@ -1893,12 +1884,12 @@ router.get('/uf-field-options', async (req, res) => {
   try {
     if (!BX_WEBHOOK) return res.json({ options: [] });
 
+    const { bitrixCall } = require('../services/bitrix');
+
     // SOURCE_ID is a crm_status type — use crm.status.list instead of crm.lead.fields
     if (field === 'SOURCE_ID') {
-      const { data } = await axios.get(`${BX_WEBHOOK}/crm.status.list`, {
-        params: { 'filter[ENTITY_ID]': 'SOURCE' },
-        timeout: 10000,
-      });
+      const data = await bitrixCall('crm.status.list',
+        { filter: { ENTITY_ID: 'SOURCE' } }, 'uf-field-options');
       const items = data?.result ?? [];
       const options = items
         .filter(it => it.STATUS_ID && it.NAME)
@@ -1906,7 +1897,7 @@ router.get('/uf-field-options', async (req, res) => {
       return res.json({ options });
     }
 
-    const { data } = await axios.get(`${BX_WEBHOOK}/crm.lead.fields`, { timeout: 10000 });
+    const data = await bitrixCall('crm.lead.fields', {}, 'uf-field-options');
     const fieldDef = data?.result?.[field];
     if (!fieldDef?.items) return res.json({ options: [] });
     const options = fieldDef.items

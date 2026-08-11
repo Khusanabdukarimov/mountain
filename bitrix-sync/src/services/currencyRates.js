@@ -15,7 +15,7 @@ async function getRates() {
   if (Date.now() - cacheAt < TTL && Object.keys(cache).length > 0) return cache;
 
   try {
-    const res  = await bitrixCall('crm.currency.list');
+    const res  = await bitrixCall('crm.currency.list', {}, 'currency-rates');
     const list = res.result || [];
     const rates = {};
     for (const c of list) {

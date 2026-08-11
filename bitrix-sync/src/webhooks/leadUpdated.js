@@ -7,7 +7,7 @@ async function fetchOneWithRetry(method, id, maxRetries = 3) {
   const delays = [5000, 15000, 45000];
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
-      return await fetchOne(method, id);
+      return await fetchOne(method, id, 'webhook:leadUpdated');
     } catch (err) {
       if (attempt < maxRetries) {
         const delay = delays[attempt] ?? 45000;

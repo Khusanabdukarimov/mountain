@@ -32,7 +32,7 @@ async function reconcileRecentLeads(daysBack = 3) {
     // Tashkent (UTC+5) local ISO without tz — Bitrix interprets in portal tz
     const t = new Date(sinceMs + 5 * 3600 * 1000);
     const since = `${t.getUTCFullYear()}-${String(t.getUTCMonth()+1).padStart(2,'0')}-${String(t.getUTCDate()).padStart(2,'0')}T00:00:00`;
-    const leads = await fetchAll('crm.lead.list', { '>=DATE_MODIFY': since }, LEAD_SELECT);
+    const leads = await fetchAll('crm.lead.list', { '>=DATE_MODIFY': since }, LEAD_SELECT, 'reconcile-leads');
     let n = 0;
     for (const r of leads) { await upsertLead(r); n++; }
     console.log(`[reconcile-leads] re-synced ${n} leads modified since ${since} (Tashkent)`);

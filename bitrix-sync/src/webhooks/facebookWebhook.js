@@ -119,7 +119,7 @@ async function createBitrixLead(leadgenId, raw, fields) {
             UTM_CONTENT:  raw.adset_name   || '',
             UTM_TERM:     raw.ad_name      || '',
           };
-          const updRes = await bitrixPost('crm.lead.update', { id: existingId, fields: utmFields });
+          const updRes = await bitrixPost('crm.lead.update', { id: existingId, fields: utmFields }, 'facebook-webhook');
           if (updRes && updRes.result) {
             await pool.query(
               `UPDATE leads SET utm_source=$2, utm_medium=$3, utm_campaign=$4, utm_content=$5, utm_term=$6 WHERE id=$1`,
@@ -155,7 +155,7 @@ async function createBitrixLead(leadgenId, raw, fields) {
   if (phone) bxFields.PHONE = [{ VALUE: phone, VALUE_TYPE: 'WORK' }];
   if (email) bxFields.EMAIL = [{ VALUE: email, VALUE_TYPE: 'WORK' }];
 
-  const bxRes = await bitrixPost('crm.lead.add', { fields: bxFields });
+  const bxRes = await bitrixPost('crm.lead.add', { fields: bxFields }, 'facebook-webhook');
 
   if (bxRes && bxRes.result) {
     const newLeadId = bxRes.result;
@@ -169,7 +169,7 @@ async function createBitrixLead(leadgenId, raw, fields) {
     // Bitrix24 dan to'liq lead ma'lumotlarini olib DBga saqlash va taqsimot qilish
     // (ONCRMLEAD_ADD webhook kelmasa ham ishlash uchun)
     try {
-      const rawLead = await fetchOne('crm.lead.get', newLeadId);
+      const rawLead = await fetchOne('crm.lead.get', newLeadId, 'facebook-webhook');
       if (rawLead) {
         // Patch UTM_CAMPAIGN from FB lead data if Bitrix24 doesn't return it
         if (!rawLead.UTM_CAMPAIGN && raw.campaign_name) {

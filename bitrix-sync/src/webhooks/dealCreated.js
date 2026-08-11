@@ -18,7 +18,7 @@ async function dealCreated(req, res) {
       [entityId, JSON.stringify(req.body)]
     );
 
-    const raw = await fetchOne('crm.deal.get', entityId);
+    const raw = await fetchOne('crm.deal.get', entityId, 'webhook:dealCreated');
     if (!raw) return;
 
     await upsertDeal(raw);

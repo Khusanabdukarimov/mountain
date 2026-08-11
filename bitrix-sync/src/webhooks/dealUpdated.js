@@ -21,7 +21,7 @@ async function dealUpdated(req, res) {
     const before = await pool.query('SELECT stage_id FROM deals WHERE id = $1', [entityId]);
     const prevStageId = before.rows[0]?.stage_id || null;
 
-    const raw = await fetchOne('crm.deal.get', entityId);
+    const raw = await fetchOne('crm.deal.get', entityId, 'webhook:dealUpdated');
     if (!raw) return;
 
     await upsertDeal(raw);

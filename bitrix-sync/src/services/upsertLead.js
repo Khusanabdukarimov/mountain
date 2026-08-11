@@ -219,7 +219,7 @@ async function upsertLead(r, client) {
 
   if (Object.keys(bxUpdateFields).length > 0 && r.ID) {
     const { bitrixCall } = require('./bitrix');
-    bitrixCall('crm.lead.update', { id: parseInt(r.ID), fields: bxUpdateFields })
+    bitrixCall('crm.lead.update', { id: parseInt(r.ID), fields: bxUpdateFields }, 'upsertLead:utm-writeback')
       .catch(e => console.warn(`[upsertLead] Bitrix24 UTM sync xatosi (#${r.ID}):`, e.message));
   }
 

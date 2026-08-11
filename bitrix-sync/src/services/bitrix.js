@@ -1,6 +1,5 @@
 require('dotenv').config();
-const https = require('https');
-const http = require('http');
+const bitrixClient = require('./bitrixClient');
 
 const WEBHOOK_URL = process.env.BITRIX_WEBHOOK_URL;
 const PAGE_DELAY_MS = 600; // 600ms between batch calls ≈ 1.67 req/s (safe under 2 req/s limit)
@@ -11,26 +10,11 @@ function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function httpGet(url, timeoutMs = 30000) {
-  return new Promise((resolve, reject) => {
-    const lib = url.startsWith('https') ? https : http;
-    const req = lib.get(url, (res) => {
-      let data = '';
-      res.on('data', (chunk) => (data += chunk));
-      res.on('end', () => {
-        try {
-          resolve(JSON.parse(data));
-        } catch (e) {
-          reject(new Error(`JSON parse error: ${e.message}`));
-        }
-      });
-      res.on('error', reject);
-    });
-    req.setTimeout(timeoutMs, () => {
-      req.destroy(new Error(`Request timed out after ${timeoutMs}ms`));
-    });
-    req.on('error', reject);
-  });
+// Every request in this module goes through bitrixClient.call — that is where
+// the shared keep-alive agent and the per-call log live. The retry/backoff
+// logic below is unchanged; it sits on top.
+function httpGet(url, timeoutMs = 30000, meta = {}) {
+  return bitrixClient.call({ url, httpMethod: 'GET', timeoutMs, ...meta });
 }
 
 function buildUrl(method, params) {
@@ -55,9 +39,10 @@ function buildUrl(method, params) {
  * @param {string} method  e.g. "crm.lead.list"
  * @param {object} filter  Bitrix filter object
  * @param {string[]} select  Fields to select
+ * @param {string} source  Calling subsystem, for the bitrix_api_log breakdown
  * @returns {Promise<object[]>} All records across all pages
  */
-async function fetchAll(method, filter = {}, select = []) {
+async function fetchAll(method, filter = {}, select = [], source = 'unknown') {
   const params = { start: 0 };
   if (Object.keys(filter).length) params.filter = filter;
   if (select.length) params.select = select;
@@ -71,7 +56,7 @@ async function fetchAll(method, filter = {}, select = []) {
     const delays = [5000, 15000, 45000];
     for (let attempt = 0; attempt < delays.length; attempt++) {
       try {
-        firstPage = await httpGet(firstUrl, 35000);
+        firstPage = await httpGet(firstUrl, 35000, { method, source });
         if (firstPage.result) break;
         firstPage = null;
         await sleep(delays[attempt]);
@@ -127,7 +112,9 @@ async function fetchAll(method, filter = {}, select = []) {
     const delays = [5000, 15000, 45000]; // exponential backoff
     for (let attempt = 0; attempt < delays.length; attempt++) {
       try {
-        const res = await httpPost(`${WEBHOOK_URL}/batch`, { halt: 0, cmd }, 35000);
+        const res = await httpPost(`${WEBHOOK_URL}/batch`, { halt: 0, cmd }, 35000, {
+          method: `batch:${method}`, source,
+        });
         const batchResult = res.result && res.result.result;
         if (batchResult) {
           for (const key of Object.keys(cmd)) {
@@ -162,58 +149,30 @@ async function fetchAll(method, filter = {}, select = []) {
 /**
  * Fetch a single Bitrix24 entity by ID.
  */
-async function fetchOne(method, id) {
+async function fetchOne(method, id, source = 'unknown') {
   const url = buildUrl(method, { id });
-  const res = await httpGet(url);
+  const res = await httpGet(url, 30000, { method, source, entityId: parseInt(id) || null });
   return res.result || null;
 }
 
 /**
  * Call a single Bitrix24 method with arbitrary params (GET-style).
  */
-async function bitrixCall(method, params = {}) {
+async function bitrixCall(method, params = {}, source = 'unknown') {
   const url = buildUrl(method, params);
-  return httpGet(url);
+  return httpGet(url, 30000, { method, source, entityId: parseInt(params.id) || null });
 }
 
 /**
  * POST request to Bitrix24 (for crm.lead.add, crm.lead.update, etc.)
  */
-function httpPost(url, data, timeoutMs = 30000) {
-  return new Promise((resolve, reject) => {
-    const body = JSON.stringify(data);
-    const urlObj = new URL(url);
-    const lib = url.startsWith('https') ? https : http;
-    const req = lib.request(
-      {
-        hostname: urlObj.hostname,
-        path: urlObj.pathname + urlObj.search,
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Content-Length': Buffer.byteLength(body),
-        },
-      },
-      (res) => {
-        let buf = '';
-        res.on('data', (chunk) => (buf += chunk));
-        res.on('end', () => {
-          try { resolve(JSON.parse(buf)); }
-          catch (e) { reject(new Error(`JSON parse error: ${e.message}`)); }
-        });
-        res.on('error', reject);
-      }
-    );
-    req.setTimeout(timeoutMs, () => req.destroy(new Error('Request timed out')));
-    req.on('error', reject);
-    req.write(body);
-    req.end();
-  });
+function httpPost(url, data, timeoutMs = 30000, meta = {}) {
+  return bitrixClient.call({ url, httpMethod: 'POST', body: data, timeoutMs, ...meta });
 }
 
-async function bitrixPost(method, params = {}) {
+async function bitrixPost(method, params = {}, source = 'unknown') {
   const url = `${WEBHOOK_URL}/${method}`;
-  return httpPost(url, params);
+  return httpPost(url, params, 30000, { method, source, entityId: parseInt(params.id) || null });
 }
 
 module.exports = { fetchAll, fetchOne, bitrixCall, bitrixPost };

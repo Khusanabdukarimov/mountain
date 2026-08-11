@@ -73,7 +73,7 @@ async function distributeLead(leadId) {
     bitrixCall('crm.lead.update', {
       id: leadId,
       fields: { ASSIGNED_BY_ID: bestId },
-    }).catch(err => {
+    }, 'distributor').catch(err => {
       console.error(`[distributor] Bitrix update failed for lead ${leadId}:`, err.message);
     });
 

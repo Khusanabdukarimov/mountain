@@ -138,6 +138,8 @@ Promise.all([
   `).catch(err => console.error('[startup] stages restore migration failed:', err.message)),
   rejaEnsureSchema().catch(err => console.error('[startup] reja migration failed:', err.message)),
   ensurePbxTables().catch(err => console.error('[startup] pbx migration failed:', err.message)),
+  require('./services/bitrixClient').ensureSchema()
+    .catch(err => console.error('[startup] bitrix_api_log migration failed:', err.message)),
 ]).then(() => {
   app.listen(PORT, () => {
     startCallSync();

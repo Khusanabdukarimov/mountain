@@ -1576,8 +1576,8 @@ router.post('/sync-crm-forms', async (_req, res) => {
     await pool.query(`
       ALTER TABLE crm_forms ADD COLUMN IF NOT EXISTS fb_form_id TEXT
     `);
-    const resp = await fetch(`${BITRIX_URL}crm.webform.list`);
-    const json = await resp.json();
+    const { bitrixCall } = require('../services/bitrix');
+    const json = await bitrixCall('crm.webform.list', {}, 'sync-crm-forms');
     const forms = json.result || [];
     for (const f of forms) {
       await pool.query(
@@ -1627,7 +1627,7 @@ router.post('/sync-crm-forms', async (_req, res) => {
 router.post('/sync-user-photos', async (_req, res) => {
   try {
     const { fetchAll } = require('../services/bitrix');
-    const users = await fetchAll('user.get', { ACTIVE: 'Y' });
+    const users = await fetchAll('user.get', { ACTIVE: 'Y' }, [], 'sync-user-photos');
     let updated = 0;
     for (const u of users) {
       const photoUrl = u.PERSONAL_PHOTO || null;
@@ -1919,6 +1919,69 @@ router.delete('/payments', async (req, res) => {
     res.json({ deleted });
   } catch (err) {
     console.error('[payments DELETE]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * GET /api/dashboard/bitrix-stats?days=2
+ *
+ * Where our outbound Bitrix24 traffic actually goes. Every call made through
+ * services/bitrixClient.js lands in bitrix_api_log; this reads it back so we
+ * can size the real problem before adding rate limits (see the Aug 5-10 IP
+ * block investigation). `reused_pct` is the keep-alive hit rate — the number
+ * that matters most, since connection churn, not request count, is what got
+ * this server blocked.
+ */
+router.get('/bitrix-stats', async (req, res) => {
+  try {
+    const days = Math.min(parseInt(req.query.days) || 2, 30);
+    const since = `${days} days`;
+
+    const [totals, bySource, byMethod, byHour, repeats] = await Promise.all([
+      pool.query(`
+        SELECT COUNT(*)::int                                        AS calls,
+               COUNT(*) FILTER (WHERE NOT ok)::int                   AS errors,
+               ROUND(100.0 * COUNT(*) FILTER (WHERE reused_socket)
+                     / NULLIF(COUNT(*), 0), 1)                       AS reused_pct,
+               ROUND(AVG(duration_ms))::int                          AS avg_ms,
+               MAX(duration_ms)::int                                 AS max_ms,
+               ROUND(COUNT(*)::numeric / $1, 1)                      AS calls_per_day
+        FROM bitrix_api_log WHERE at > NOW() - $2::interval`, [days, since]),
+      pool.query(`
+        SELECT source, COUNT(*)::int AS calls,
+               COUNT(*) FILTER (WHERE NOT ok)::int AS errors,
+               ROUND(COUNT(*)::numeric / $1, 1) AS per_day
+        FROM bitrix_api_log WHERE at > NOW() - $2::interval
+        GROUP BY source ORDER BY calls DESC`, [days, since]),
+      pool.query(`
+        SELECT method, COUNT(*)::int AS calls
+        FROM bitrix_api_log WHERE at > NOW() - $1::interval
+        GROUP BY method ORDER BY calls DESC LIMIT 20`, [since]),
+      pool.query(`
+        SELECT date_trunc('hour', at) AS hour, COUNT(*)::int AS calls
+        FROM bitrix_api_log WHERE at > NOW() - $1::interval
+        GROUP BY 1 ORDER BY 1 DESC LIMIT 48`, [since]),
+      // Same entity fetched over and over = what debouncing would collapse
+      pool.query(`
+        SELECT entity_id, method, COUNT(*)::int AS fetches
+        FROM bitrix_api_log
+        WHERE at > NOW() - $1::interval AND entity_id IS NOT NULL
+        GROUP BY entity_id, method HAVING COUNT(*) > 2
+        ORDER BY fetches DESC LIMIT 20`, [since]),
+    ]);
+
+    res.json({
+      days,
+      totals: totals.rows[0],
+      edge_health: require('../services/bitrixClient').edgeHealth(),
+      by_source: bySource.rows,
+      by_method: byMethod.rows,
+      by_hour: byHour.rows,
+      repeat_fetches: repeats.rows,
+    });
+  } catch (err) {
+    console.error('[bitrix-stats]', err.message);
     res.status(500).json({ error: err.message });
   }
 });

@@ -24,7 +24,7 @@ async function taskUpdated(req, res) {
       [taskId, JSON.stringify(req.body)]
     );
 
-    const raw = await fetchOne('tasks.task.get', taskId);
+    const raw = await fetchOne('tasks.task.get', taskId, 'webhook:taskUpdated');
     const task = raw?.task || raw;
     if (!task) return;
 

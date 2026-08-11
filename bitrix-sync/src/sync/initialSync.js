@@ -31,7 +31,7 @@ const DEAL_SELECT = [
 
 async function syncUsers() {
   console.log('[sync] Fetching users...');
-  const users = await fetchAll('user.get', { ACTIVE: 'Y' });
+  const users = await fetchAll('user.get', { ACTIVE: 'Y' }, [], 'initial-sync');
   console.log(`[sync] Got ${users.length} users`);
 
   for (const u of users) {
@@ -68,7 +68,7 @@ async function syncUsers() {
 
 async function syncLeads() {
   console.log('[sync] Fetching leads...');
-  const leads = await fetchAll('crm.lead.list', {}, LEAD_SELECT);
+  const leads = await fetchAll('crm.lead.list', {}, LEAD_SELECT, 'initial-sync');
   console.log(`[sync] Got ${leads.length} leads, upserting...`);
 
   let count = 0;
@@ -92,7 +92,7 @@ async function syncLeads() {
 
 async function syncDeals() {
   console.log('[sync] Fetching deals...');
-  const deals = await fetchAll('crm.deal.list', {}, DEAL_SELECT);
+  const deals = await fetchAll('crm.deal.list', {}, DEAL_SELECT, 'initial-sync');
   console.log(`[sync] Got ${deals.length} deals, upserting...`);
 
   let count = 0;
@@ -116,7 +116,7 @@ async function syncDeals() {
 
 async function syncContacts() {
   console.log('[sync] Fetching contacts...');
-  const contacts = await fetchAll('crm.contact.list', {}, ['ID', 'PHONE']);
+  const contacts = await fetchAll('crm.contact.list', {}, ['ID', 'PHONE'], 'initial-sync');
   console.log(`[sync] Got ${contacts.length} contacts, upserting...`);
 
   await pool.query('DELETE FROM contact_phones');

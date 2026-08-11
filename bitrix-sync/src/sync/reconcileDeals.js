@@ -29,7 +29,7 @@ async function reconcileRecentDeals(daysBack = 3) {
     // Tashkent (UTC+5) local ISO without tz — Bitrix interprets in portal tz
     const t = new Date(sinceMs + 5 * 3600 * 1000);
     const since = `${t.getUTCFullYear()}-${String(t.getUTCMonth()+1).padStart(2,'0')}-${String(t.getUTCDate()).padStart(2,'0')}T00:00:00`;
-    const deals = await fetchAll('crm.deal.list', { '>=DATE_MODIFY': since }, DEAL_SELECT);
+    const deals = await fetchAll('crm.deal.list', { '>=DATE_MODIFY': since }, DEAL_SELECT, 'reconcile-deals');
     let n = 0;
     for (const r of deals) { await upsertDeal(r); n++; }
     console.log(`[reconcile-deals] re-synced ${n} deals modified since ${since} (Tashkent)`);
