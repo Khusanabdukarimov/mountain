@@ -101,9 +101,18 @@ export function getResponsiblesStats(filter: DashFilter) {
   }, API_URL_CRM);
 }
 
+/** Which field the Lid va Konversiya table groups by. Metrics are identical
+ *  across all of them — only the grouping key changes. */
+export type ConversionDimension = "manager" | "source" | "campaign" | "stage";
+
 export type ConversionStatsResponse = {
   conversion: {
-    responsible_id: number;
+    /** Grouping key — a responsible id, source code, campaign name, or stage code. */
+    key: string;
+    /** Human label for the key. '—' when the lead has no value for this field. */
+    name: string;
+    /** Set only for the manager dimension; null otherwise. */
+    responsible_id: number | null;
     full_name: string;
     total: number;
     jarayonda: number;
@@ -114,7 +123,7 @@ export type ConversionStatsResponse = {
   }[];
 };
 
-export function getConversionStats(filter: DashFilter) {
+export function getConversionStats(filter: DashFilter, dimension: ConversionDimension = "manager") {
   return apiGet<ConversionStatsResponse>("/api/dashboard/lead-conversion", {
     from: filter.start_date,
     to: filter.end_date,
@@ -122,6 +131,7 @@ export function getConversionStats(filter: DashFilter) {
     stage: filter.stages?.join(','),
     source: filter.sources?.join(','),
     mode: filter.mode,
+    dimension,
   }, API_URL_CRM);
 }
 
@@ -498,12 +508,16 @@ export type ResponsibleLeadRow = {
   tashrif_buyurdi: number;
 };
 
+/** Drill-down for one row of the conversion table. Passes the same dimension +
+ *  key the row was grouped on, so the sub-table can't disagree with the totals. */
 export function getResponsibleLeads(
-  responsibleId: number,
+  key: string | number,
   filter: Pick<DashFilter, "start_date" | "end_date" | "mode">,
+  dimension: ConversionDimension = "manager",
 ) {
   return apiGet<ResponsibleLeadRow[]>("/api/dashboard/responsible-leads", {
-    responsible_id: responsibleId,
+    key: String(key),
+    dimension,
     from: filter.start_date,
     to: filter.end_date,
     mode: filter.mode,

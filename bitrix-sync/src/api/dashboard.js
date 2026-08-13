@@ -1008,17 +1008,91 @@ router.get('/lead-responsibles', async (req, res) => {
 });
 
 /**
- * GET /api/dashboard/lead-conversion
- * Per-responsible conversion funnel.  Replaces Python /api/conversion.
+ * Lid va Konversiya — grouping dimensions.
+ *
+ * Only the GROUPING KEY varies between dimensions; every metric below is
+ * computed from the lead's live stage exactly the same way regardless of which
+ * dimension is selected. That is what keeps one metrics block reusable across
+ * all tabs — adding a dimension is adding an entry here, never duplicating the
+ * aggregation. A lead with no value for the chosen field is bucketed under '—'
+ * rather than dropped, so every tab's total still equals the full lead count.
+ */
+const LEAD_CONV_METRICS = `
+  COUNT(fl.id)::int                                                        AS total,
+  COUNT(fl.id) FILTER (WHERE fl.stage_bid IN (
+    'NEW','IN_PROCESS','PROCESSED',
+    'UC_1KPATX','UC_Q2U9EL','UC_KXC3ZW','UC_L28G68','UC_5G8244'
+  ))::int                                                                  AS jarayonda,
+  COUNT(fl.id) FILTER (WHERE fl.stage_bid IN (
+    'UC_KXC3ZW','THINKING','UC_L28G68','CONSULTATION',
+    'CONVERTED_CONSULT','CONVERTED','UC_NAZK5J','RECYCLED',
+    'UC_5G8244','NOT_TRANSFERRED','JUNK','ARCHIVE'
+  ))::int                                                                  AS sifatli_lid,
+  COUNT(fl.id) FILTER (WHERE fl.stage_bid IN ('UC_F8K4GI','JUNK'))::int    AS sifatsiz_lid,
+  COUNT(fl.id) FILTER (WHERE fl.stage_bid IN ('UC_NAZK5J','RECYCLED'))::int AS bekor_boldi,
+  COUNT(fl.id) FILTER (WHERE fl.stage_bid = 'CONVERTED')::int              AS tashrif_buyurdi
+`;
+
+const LEAD_CONV_DIMS = {
+  // Grouped from `responsibles`, not from the leads, so a manager with zero
+  // leads in the period still shows as a row with 0s instead of vanishing.
+  manager: {
+    select: `
+      SELECT r.id::text AS key,
+             TRIM(COALESCE(r.name,'') || ' ' || COALESCE(r.last_name,'')) AS name,
+             r.id AS responsible_id,
+             ${LEAD_CONV_METRICS}
+      FROM responsibles r
+      LEFT JOIN fl ON fl.responsible_id = r.id
+      WHERE r.active = TRUE
+      GROUP BY r.id, r.name, r.last_name`,
+    // Drill-down must filter by the SAME key this row was grouped on.
+    leadWhere: (n) => `l.responsible_id::text = $${n}`,
+  },
+  source: {
+    select: `
+      SELECT COALESCE(NULLIF(fl.source_id,''), '—') AS key,
+             COALESCE(NULLIF(fl.source_id,''), '—') AS name,
+             NULL::int AS responsible_id,
+             ${LEAD_CONV_METRICS}
+      FROM fl GROUP BY 1, 2`,
+    leadWhere: (n) => `COALESCE(NULLIF(l.source_id,''), '—') = $${n}`,
+  },
+  campaign: {
+    select: `
+      SELECT COALESCE(NULLIF(fl.utm_campaign,''), '—') AS key,
+             COALESCE(NULLIF(fl.utm_campaign,''), '—') AS name,
+             NULL::int AS responsible_id,
+             ${LEAD_CONV_METRICS}
+      FROM fl GROUP BY 1, 2`,
+    leadWhere: (n) => `COALESCE(NULLIF(l.utm_campaign,''), '—') = $${n}`,
+  },
+  stage: {
+    select: `
+      SELECT fl.stage_bid AS key,
+             COALESCE(fl.stage_name, fl.stage_bid) AS name,
+             NULL::int AS responsible_id,
+             ${LEAD_CONV_METRICS}
+      FROM fl GROUP BY 1, 2`,
+    leadWhere: (n) => `s.bitrix_id = $${n}`,
+  },
+};
+
+/**
+ * GET /api/dashboard/lead-conversion?dimension=manager|source|campaign|stage
+ * Conversion funnel grouped by the requested dimension (default: manager).
+ * Replaces Python /api/conversion.
  */
 router.get('/lead-conversion', async (req, res) => {
-  const { from, to, responsible_id, stage, source, mode } = req.query;
+  const { from, to, responsible_id, stage, source, mode, dimension } = req.query;
+  const dim = LEAD_CONV_DIMS[dimension] || LEAD_CONV_DIMS.manager;
   const params = [from || null, to || null, responsible_id || null, stage || null, source || null];
 
   try {
     const { rows } = await pool.query(
       `WITH fl AS (
-         SELECT l.id, l.responsible_id, s.bitrix_id AS stage_bid
+         SELECT l.id, l.responsible_id, l.source_id, l.utm_campaign,
+                s.bitrix_id AS stage_bid, s.name AS stage_name
          FROM leads l
          JOIN stages s ON s.id = l.stage_id
          WHERE ${leadDateCond(mode, 1, 2)}
@@ -1027,30 +1101,17 @@ router.get('/lead-conversion', async (req, res) => {
            AND ${leadSrcCond(mode, 5)}
            ${leadModeClause(mode)}
        )
-       SELECT
-         r.id                                                                                  AS responsible_id,
-         TRIM(COALESCE(r.name,'') || ' ' || COALESCE(r.last_name,''))                         AS full_name,
-         COUNT(fl.id)::int                                                                     AS total,
-         COUNT(fl.id) FILTER (WHERE fl.stage_bid IN (
-           'NEW','IN_PROCESS','PROCESSED',
-           'UC_1KPATX','UC_Q2U9EL','UC_KXC3ZW','UC_L28G68','UC_5G8244'
-         ))::int                                                                               AS jarayonda,
-         COUNT(fl.id) FILTER (WHERE fl.stage_bid IN (
-           'UC_KXC3ZW','THINKING','UC_L28G68','CONSULTATION',
-           'CONVERTED_CONSULT','CONVERTED','UC_NAZK5J','RECYCLED',
-           'UC_5G8244','NOT_TRANSFERRED','JUNK','ARCHIVE'
-         ))::int                                                                               AS sifatli_lid,
-         COUNT(fl.id) FILTER (WHERE fl.stage_bid IN ('UC_F8K4GI','JUNK'))::int                AS sifatsiz_lid,
-         COUNT(fl.id) FILTER (WHERE fl.stage_bid IN ('UC_NAZK5J','RECYCLED'))::int             AS bekor_boldi,
-         COUNT(fl.id) FILTER (WHERE fl.stage_bid = 'CONVERTED')::int                         AS tashrif_buyurdi
-       FROM responsibles r
-       LEFT JOIN fl ON fl.responsible_id = r.id
-       WHERE r.active = TRUE
-       GROUP BY r.id, r.name, r.last_name
+       ${dim.select}
        ORDER BY total DESC`,
       params
     );
-    res.json({ conversion: rows });
+    // Source codes are stored raw; the human label lives in SOURCE_NAMES.
+    const conversion = rows.map(r => ({
+      ...r,
+      name: dimension === 'source' ? (SOURCE_NAMES[r.key] || r.name) : r.name,
+      full_name: dimension === 'source' ? (SOURCE_NAMES[r.key] || r.name) : r.name,
+    }));
+    res.json({ conversion });
   } catch (err) {
     console.error('[dashboard/lead-conversion]', err.message);
     res.status(500).json({ error: err.message });
@@ -1650,10 +1711,18 @@ router.post('/sync-user-photos', async (_req, res) => {
  * Individual leads for a specific responsible — used for drill-down sub-table.
  */
 router.get('/responsible-leads', async (req, res) => {
-  const { responsible_id, from, to, mode } = req.query;
-  if (!responsible_id) return res.status(400).json({ error: 'responsible_id required' });
+  const { responsible_id, from, to, mode, dimension, key } = req.query;
 
-  const params = [parseInt(responsible_id), from || null, to || null];
+  // Drill-down reuses the grouping dimension's own WHERE clause, so "click a
+  // row → see its leads" can never disagree with how that row's totals were
+  // counted. `responsible_id` stays supported for existing callers.
+  const dim = LEAD_CONV_DIMS[dimension] || LEAD_CONV_DIMS.manager;
+  const groupKey = key != null && key !== '' ? String(key) : responsible_id;
+  if (groupKey == null || groupKey === '') {
+    return res.status(400).json({ error: 'key (or responsible_id) required' });
+  }
+
+  const params = [groupKey, from || null, to || null];
 
   try {
     const { rows } = await pool.query(
@@ -1682,7 +1751,7 @@ router.get('/responsible-leads', async (req, res) => {
          (s.bitrix_id IN ('CONVERTED_CONSULT','CONVERTED'))::int                   AS tashrif_buyurdi
        FROM leads l
        JOIN stages s ON s.id = l.stage_id
-       WHERE l.responsible_id = $1
+       WHERE ${dim.leadWhere(1)}
          AND ($2::date IS NULL OR l.date_create::date >= $2::date)
          AND ($3::date IS NULL OR l.date_create::date <= $3::date)
          ${mode === 'amocrm' ? `AND l.source_id = 'UC_1WUFJB'` : ``}

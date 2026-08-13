@@ -12,7 +12,7 @@ import {
   getAmocrmSources,
   getSourceStats, getUtmStats, getUtmCampaignStats, getUtmMediumStats, getUtmContentStats, getUtmTermStats, getUtmResponsibleStats, getResponsibleLeads,
   type DashFilter,
-  type SourceStatsRow, type ResponsibleLeadRow,
+  type SourceStatsRow, type ResponsibleLeadRow, type ConversionDimension,
 } from "@/lib/api/leads";
 import { fmtNum } from "@/lib/utils";
 import { useLocalStorage } from "@/hooks/useLocalStorage";
@@ -130,6 +130,20 @@ const RESPONSIBLE_COLS = [
   { key: "bekor_boldi",             label: "Bekor bo'ldi",             color: "#FFC107" },
 ] as const;
 type RespColKey = typeof RESPONSIBLE_COLS[number]["key"];
+
+/**
+ * Lid va Konversiya grouping dimensions. Adding a tab is adding an entry here —
+ * the metric columns, the totals row and the drill-down are all shared, because
+ * only the grouping key differs between them (the backend computes every metric
+ * off the lead's live stage regardless of which dimension is selected).
+ * `label` doubles as the header of the group column.
+ */
+const CONV_DIMS: { key: ConversionDimension; tab: string; label: string }[] = [
+  { key: "manager",  tab: "Menejer",   label: "Menejer"   },
+  { key: "source",   tab: "Manba",     label: "Manba"     },
+  { key: "campaign", tab: "Kampaniya", label: "Kampaniya" },
+  { key: "stage",    tab: "Bosqich",   label: "Bosqich"   },
+];
 
 // ── Shared mini-components ────────────────────────────────────────
 const AVATAR_COLORS = [
@@ -371,16 +385,17 @@ export default function LidlarPage() {
 
   const statsQ      = useQuery({ queryKey: ["stats/dashboard",    appliedWithMode], queryFn: () => getDashboardStats(appliedWithMode) });
   const respQ       = useQuery({ queryKey: ["stats/responsibles", appliedWithMode], queryFn: () => getResponsiblesStats(appliedWithMode) });
-  const conversionQ = useQuery({ queryKey: ["stats/conversion",   appliedWithMode], queryFn: () => getConversionStats(appliedWithMode) });
+  const [convDim, setConvDim] = useState<ConversionDimension>("manager");
+  const conversionQ = useQuery({ queryKey: ["stats/conversion",   appliedWithMode, convDim], queryFn: () => getConversionStats(appliedWithMode, convDim) });
   const tasksQ      = useQuery({ queryKey: ["stats/tasks",        appliedWithMode], queryFn: () => getTasksSummary(appliedWithMode) });
   const cancelQ     = useQuery({ queryKey: ["stats/cancel-reasons", appliedWithMode], queryFn: () => getCancelReasons(appliedWithMode) });
   const junkQ       = useQuery({ queryKey: ["stats/junk-reasons",   appliedWithMode], queryFn: () => getJunkReasons(appliedWithMode) });
   const sourceQ     = useQuery({ queryKey: ["stats/source-stats", appliedWithMode], queryFn: () => getSourceStats(appliedWithMode) });
   const utmStatsQ   = useQuery({ queryKey: ["stats/utm-stats", appliedWithMode], queryFn: () => getUtmStats(appliedWithMode) });
-  const [selectedRespConv, setSelectedRespConv] = useState<{ id: number; name: string } | null>(null);
+  const [selectedRespConv, setSelectedRespConv] = useState<{ id: string; name: string } | null>(null);
   const respLeadsConvQ = useQuery({
-    queryKey: ["stats/responsible-leads-conv", selectedRespConv?.id, appliedWithMode],
-    queryFn: () => getResponsibleLeads(selectedRespConv!.id, appliedWithMode),
+    queryKey: ["stats/responsible-leads-conv", selectedRespConv?.id, appliedWithMode, convDim],
+    queryFn: () => getResponsibleLeads(selectedRespConv!.id, appliedWithMode, convDim),
     enabled: selectedRespConv !== null,
   });
   const [selectedRespMasul, setSelectedRespMasul] = useState<{ id: number; name: string } | null>(null);
@@ -478,10 +493,13 @@ export default function LidlarPage() {
 
   // ── Lid va Konversiya rows (sorted by total desc) ───────────────
   const convRows = useMemo(() => {
-    const rows = (conversionQ.data?.conversion ?? []).filter((r) => !isExcluded(r.full_name));
+    // EXCLUDED_RESPONSIBLES is a list of people, so it only applies when the
+    // rows are people — a campaign or source name must never be dropped by it.
+    const raw = conversionQ.data?.conversion ?? [];
+    const rows = convDim === "manager" ? raw.filter((r) => !isExcluded(r.name)) : [...raw];
     rows.sort((a, b) => b.total - a.total);
     return rows;
-  }, [conversionQ.data]);
+  }, [conversionQ.data, convDim]);
 
   const convMax = useMemo(() => ({
     total:     Math.max(1, ...convRows.map((r) => r.total)),
@@ -810,8 +828,24 @@ export default function LidlarPage() {
             Lid va Konversiya table
         ══════════════════════════════════════════════════════════ */}
         <div style={{ background:"var(--bg2)", borderRadius:12, overflow:"hidden", marginBottom:16 }}>
-          <div style={{ padding:"16px 20px 12px", borderBottom:"1px solid var(--border)" }}>
+          <div style={{ padding:"16px 20px 12px", borderBottom:"1px solid var(--border)", display:"flex", alignItems:"center", gap:16, flexWrap:"wrap" }}>
             <span style={{ fontSize:18, fontWeight:700, color:"var(--text)" }}>Lid va Konversiya</span>
+            <div style={{ display:"flex", background:"var(--bg3)", border:"1px solid var(--border)", borderRadius:8, padding:3, gap:2 }}>
+              {CONV_DIMS.map((d) => (
+                <button
+                  key={d.key}
+                  onClick={() => { setConvDim(d.key); setSelectedRespConv(null); }}
+                  style={{
+                    border:"none", borderRadius:6, fontSize:11.5, fontWeight:600,
+                    padding:"5px 12px", cursor:"pointer", transition:"all 0.2s",
+                    background: convDim === d.key ? "#2196F3" : "transparent",
+                    color:      convDim === d.key ? "#fff"    : "var(--text2)",
+                  }}
+                >
+                  {d.tab}
+                </button>
+              ))}
+            </div>
           </div>
 
           {conversionQ.isLoading ? (
@@ -833,7 +867,9 @@ export default function LidlarPage() {
                 <thead>
                   <tr>
                     <th style={TH("#555", 44)}>#</th>
-                    <th style={TH("#9E9E9E", 200)}>Menejer</th>
+                    <th style={TH("#9E9E9E", 200)}>
+                      {CONV_DIMS.find((d) => d.key === convDim)?.label ?? "Menejer"}
+                    </th>
                     <th style={TH("#2196F3")}>Jami Lid</th>
                     <th style={TH("#FF9800")}>Jarayonda</th>
                     <th style={TH("#00BCD4")}>Sifatli Lid</th>
@@ -846,7 +882,7 @@ export default function LidlarPage() {
                 <tbody>
                   {convRows.map((r, i) => {
                     const konv = (r.sifatli_lid ?? 0) > 0 ? (r.tashrif_buyurdi / (r.sifatli_lid ?? 0)) * 100 : 0;
-                    const isSelected = selectedRespConv?.id === r.responsible_id;
+                    const isSelected = selectedRespConv?.id === r.key;
                     const subLeads: ResponsibleLeadRow[] = isSelected ? (respLeadsConvQ.data ?? []) : [];
                     const STAGE_MAP_INLINE: Record<string, { label: string; color: string }> = {
                       NEW:               { label: "Yangi lid",          color: "#2196F3" },
@@ -872,9 +908,9 @@ export default function LidlarPage() {
                     };
                     return (
                       <>
-                        <tr key={r.responsible_id}
+                        <tr key={r.key}
                             style={{ background: isSelected ? "rgba(33,150,243,0.08)" : i % 2 === 0 ? "transparent" : "var(--bg)", cursor:"pointer" }}
-                            onClick={() => setSelectedRespConv(isSelected ? null : { id: r.responsible_id, name: r.full_name || `User ${r.responsible_id}` })}
+                            onClick={() => setSelectedRespConv(isSelected ? null : { id: r.key, name: r.name || r.key })}
                             onMouseEnter={(e) => (e.currentTarget.style.background = "var(--bg3)")}
                             onMouseLeave={(e) => (e.currentTarget.style.background = isSelected ? "rgba(33,150,243,0.08)" : i % 2 === 0 ? "transparent" : "var(--bg)")}>
                           <td style={{ ...TD, color:"#555", fontSize:13, fontWeight:600, width:44 }}>
@@ -882,9 +918,13 @@ export default function LidlarPage() {
                           </td>
                           <td style={{ ...TD, width:200 }}>
                             <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-                              <AvatarCircle name={r.full_name || "?"} size={34} />
-                              <span style={{ fontSize:13, color: isSelected ? "#2196F3" : "var(--text)", fontWeight:500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}>
-                                {r.full_name}
+                              {/* Avatar only makes sense when the group IS a person */}
+                              {convDim === "manager" && <AvatarCircle name={r.name || "?"} size={34} />}
+                              <span
+                                title={r.name}
+                                style={{ fontSize:13, color: isSelected ? "#2196F3" : r.key === "—" ? "var(--text3)" : "var(--text)", fontWeight:500, overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap" }}
+                              >
+                                {r.name}
                               </span>
                             </div>
                           </td>
@@ -917,7 +957,7 @@ export default function LidlarPage() {
                           </td>
                         </tr>
                         {isSelected && (
-                          <tr key={`sub-${r.responsible_id}`}>
+                          <tr key={`sub-${r.key}`}>
                             <td colSpan={8} style={{ padding: 0, background: "rgba(33,150,243,0.04)", borderBottom: "1px solid var(--border)" }}>
                               {respLeadsConvQ.isLoading ? (
                                 <div style={{ padding: "14px 20px", color: "#666", fontSize: 13 }}>Yuklanmoqda…</div>
