@@ -103,7 +103,7 @@ export function getResponsiblesStats(filter: DashFilter) {
 
 /** Which field the Lid va Konversiya table groups by. Metrics are identical
  *  across all of them — only the grouping key changes. */
-export type ConversionDimension = "manager" | "source" | "campaign" | "stage";
+export type ConversionDimension = "manager" | "source" | "campaign" | "stage" | "report_stage";
 
 export type ConversionStatsResponse = {
   conversion: {

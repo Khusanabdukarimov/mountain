@@ -20,6 +20,7 @@ const LEAD_SELECT = [
   'UF_CRM_1775824803703', 'UF_CRM_1775825155935', 'UF_CRM_1770281264686',
   'UF_CRM_1770693781846', 'UF_CRM_1778310745831',
   'UF_CRM_1770976355232', 'UF_CRM_1770282341169',
+  'UF_CRM_1771440293231', // "Стадия (для отчетов)" — free text, set by hand; backs the report-stage dimension
 ];
 
 let running = false;

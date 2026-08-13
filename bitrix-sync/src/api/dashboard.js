@@ -1076,6 +1076,19 @@ const LEAD_CONV_DIMS = {
       FROM fl GROUP BY 1, 2`,
     leadWhere: (n) => `s.bitrix_id = $${n}`,
   },
+  // "Стадия (для отчетов)" (UF_CRM_1771440293231) — a reporting label set by
+  // hand, NOT derived from the live stage. The two are allowed to disagree;
+  // that independence is why it exists as its own field. Metrics below are
+  // still the live-stage ones, exactly as in every other dimension.
+  report_stage: {
+    select: `
+      SELECT COALESCE(NULLIF(fl.report_stage,''), '—') AS key,
+             COALESCE(NULLIF(fl.report_stage,''), '—') AS name,
+             NULL::int AS responsible_id,
+             ${LEAD_CONV_METRICS}
+      FROM fl GROUP BY 1, 2`,
+    leadWhere: (n) => `COALESCE(NULLIF(l.uf_report_stage,''), '—') = $${n}`,
+  },
 };
 
 /**
@@ -1092,6 +1105,7 @@ router.get('/lead-conversion', async (req, res) => {
     const { rows } = await pool.query(
       `WITH fl AS (
          SELECT l.id, l.responsible_id, l.source_id, l.utm_campaign,
+                l.uf_report_stage AS report_stage,
                 s.bitrix_id AS stage_bid, s.name AS stage_name
          FROM leads l
          JOIN stages s ON s.id = l.stage_id

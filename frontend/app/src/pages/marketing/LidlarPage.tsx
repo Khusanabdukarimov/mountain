@@ -143,6 +143,9 @@ const CONV_DIMS: { key: ConversionDimension; tab: string; label: string }[] = [
   { key: "source",   tab: "Manba",     label: "Manba"     },
   { key: "campaign", tab: "Kampaniya", label: "Kampaniya" },
   { key: "stage",    tab: "Bosqich",   label: "Bosqich"   },
+  // Hand-set reporting label (Bitrix "Стадия (для отчетов)"), independent of
+  // the live pipeline stage above — the two may legitimately disagree.
+  { key: "report_stage", tab: "Stadiya (otchyot)", label: "Stadiya (otchyot)" },
 ];
 
 // ── Shared mini-components ────────────────────────────────────────
