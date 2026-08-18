@@ -1438,8 +1438,14 @@ def api_marketing_kunlik_segment(section_id: int, month: str, year: int, respons
                 if day < 1 or day > days_in_month:
                     continue
                 idx = int(day) - 1
-                result["leads"][idx] += 1       # lidlar soni = deal count
-                result["qual_leads"][idx] += 1  # maqsadli lidlar = deal count
+                # Deals are deliberately NOT added to leads/qual_leads here.
+                # A deal is created from a lead, so counting both double-counted
+                # the same customer — and on the deal's date, not the lead's, so
+                # e.g. deals opened on Aug 17 from Aug 14 leads inflated Aug 17.
+                # It also made "Lidlar soni" mean something different here than
+                # in the Target section (bitrix-sync/src/api/marketing.js), which
+                # has always counted leads only. Verified against Bitrix: Aug 17
+                # Instagram = 10 leads + 6 deals showed 16; Bitrix reports 10.
                 # Every deal in this pipeline (category_id=0) is created AT the
                 # "Uchrashuv o'tkazildi" stage, so any deal that exists — regardless
                 # of its current stage — already had its meeting counted once.
