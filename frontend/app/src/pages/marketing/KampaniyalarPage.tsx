@@ -612,6 +612,10 @@ export default function KampaniyalarPage() {
   const formAdsetsMap = useMemo(() => {
     const formAdsets = new Map<string, Set<string>>(); // form_id -> adset_name set
     for (const camp of formsQ.data?.campaigns ?? []) {
+      // Targetolog scoping matters here as much as the campaign filter: one form
+      // is often shared by two targetologs' campaigns, and summing both made a
+      // form's row larger than the campaign it was filtered to.
+      if (targetologCampSet && !targetologCampSet.has(camp.campaign_name)) continue;
       if (filterCampaigns.length > 0 && !filterCampaigns.includes(camp.campaign_name)) continue;
       for (const f of camp.forms) {
         if (filterForm.length > 0 && !filterForm.includes(f.form_name)) continue;
@@ -624,7 +628,7 @@ export default function KampaniyalarPage() {
       }
     }
     return formAdsets;
-  }, [formsQ.data, filterCampaigns, filterForm, filterAdsets]);
+  }, [formsQ.data, targetologCampSet, filterCampaigns, filterForm, filterAdsets]);
 
   // Per-form lead + sifatli counts from DB (correctly split per form_id, not adset-level)
   const formLeadsMap = useMemo(() => {
@@ -671,7 +675,7 @@ const formDbStatsMap = useMemo(() => {
   // leads that period, not every ACTIVE form the account has ever created.
   const visibleForms = useMemo(() => uniqueForms.filter(form => {
     const db    = formDbStatsMap.get(form.form_id);
-    const leads = formLeadsMap.get(form.form_id)?.leads ?? db?.leads ?? 0;
+    const leads = db?.leads ?? formLeadsMap.get(form.form_id)?.leads ?? 0;
     const spend = db?.spend  ?? 0;
     const clicks= db?.clicks ?? 0;
     return leads > 0 || spend > 0 || clicks > 0;
@@ -1019,11 +1023,16 @@ const formDbStatsMap = useMemo(() => {
                                 <td className="px-4 py-3 font-semibold text-text">${Math.round(fSpend)}</td>
                                 <td className="px-4 py-3 text-text2">{Math.round(fClicks)}</td>
                                 <td className="px-4 py-3 text-text2">${cpc.toFixed(2)}</td>
+                                {/* DB-verified + filter-scoped first. formLeadsMap is Meta's own
+                                    leads_count summed over every campaign the form appears in and
+                                    ignores the active filters, so it made a row exceed the campaign
+                                    it was filtered to (18 shown as 25). Kept only as a fallback for
+                                    forms that have no creatives/adset data at all. */}
                                 <td className="px-4 py-3 font-semibold text-blue">
-                                  {fmtNum(formLeadsMap.get(form.form_id)?.leads ?? formDbStatsMap.get(form.form_id)?.leads ?? 0)}
+                                  {fmtNum(formDbStatsMap.get(form.form_id)?.leads ?? formLeadsMap.get(form.form_id)?.leads ?? 0)}
                                 </td>
-                                <td className="px-4 py-3 font-semibold" style={{ color: (formLeadsMap.get(form.form_id)?.sifatli ?? formDbStatsMap.get(form.form_id)?.sifatli ?? 0) > 0 ? "#22c55e" : "var(--text3)" }}>
-                                  {formLeadsMap.get(form.form_id)?.sifatli ?? formDbStatsMap.get(form.form_id)?.sifatli ?? 0}
+                                <td className="px-4 py-3 font-semibold" style={{ color: (formDbStatsMap.get(form.form_id)?.sifatli ?? formLeadsMap.get(form.form_id)?.sifatli ?? 0) > 0 ? "#22c55e" : "var(--text3)" }}>
+                                  {formDbStatsMap.get(form.form_id)?.sifatli ?? formLeadsMap.get(form.form_id)?.sifatli ?? 0}
                                 </td>
                               </tr>
                               {isExp && (
