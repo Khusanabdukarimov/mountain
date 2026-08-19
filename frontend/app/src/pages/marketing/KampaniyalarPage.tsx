@@ -699,15 +699,24 @@ const formDbStatsMap = useMemo(() => {
     [creativesQ.data, targetologCampSet, filterCampaigns, filterAdsets, filterCreatives, formAdsetNames],
   );
 
-  // JAMI LIDLAR = corrected Bitrix-UTM lead count (same source as the
-  // Kampaniyalar table's JAMI LID column), NOT Meta's ad-attributed "Results"
-  // (that was the removed "SARALANGAN" metric and over-counted junk-phone spam).
+  // JAMI LIDLAR = Meta form submissions, and deliberately the exact sum of the
+  // rows rendered in the Faol formalar table below — a "Jami" that disagreed
+  // with the rows under it is the one thing users cannot reconcile.
+  //
+  // This is NOT the same metric as the Kampaniyalar tab's JAMI LID column, and
+  // it is meant to differ: that column counts Bitrix leads created in the period
+  // carrying the campaign's UTM, while this counts every form submission Meta
+  // recorded. A returning customer who fills the form again is one submission
+  // here but no new Bitrix lead, and a lead whose UTM never got written is a
+  // submission here but invisible to UTM-based attribution. On 18.08 (u-mark)
+  // that gap was 28 vs 20: 6 repeat contacts whose card dated back to May, 4
+  // leads with a blank UTM, plus a few older cards.
   const pendingLeads = useMemo(
-    () => (formStatsQ.data?.rows ?? [])
-      .filter(r => !targetologCampSet || targetologCampSet.has(r.campaign_name))
-      .filter(r => filterCampaigns.length === 0 || filterCampaigns.includes(r.campaign_name))
-      .reduce((a, r) => a + (r.jami_lid ?? 0), 0),
-    [formStatsQ.data, targetologCampSet, filterCampaigns],
+    () => visibleForms.reduce(
+      (a, f) => a + (formDbStatsMap.get(f.form_id)?.leads ?? formLeadsMap.get(f.form_id)?.leads ?? 0),
+      0,
+    ),
+    [visibleForms, formDbStatsMap, formLeadsMap],
   );
 
   const totalSifatliFromForms = useMemo(
