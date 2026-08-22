@@ -90,7 +90,7 @@ router.get('/kunlik', async (req, res) => {
     return `AND ${alias}lead_id IN (SELECT id FROM leads WHERE utm_campaign = ANY($${params.length}::text[]))`;
   }
 
-  const METRICS = ['leads','qual_leads','meetings','deals','deals_sum','sales_count','sales_sum','cancelled'];
+  const METRICS = ['leads','qual_leads','meetings_set','meetings','deals','deals_sum','sales_count','sales_sum','cancelled'];
 
   const result = { target: {} };
   for (const m of METRICS) result.target[m] = makeEmpty(daysInMonth);
@@ -203,23 +203,27 @@ router.get('/kunlik', async (req, res) => {
     const meetParams = [monthStart, monthEnd, TARGET_SRC];
     const meetRespFilter = respFilter(meetParams);
     const meetTargFilter = leadTargFilter(meetParams);
-    const meetRes = await pool.query(`
-      SELECT
-        EXTRACT(DAY FROM uf_meeting_done_at AT TIME ZONE 'Asia/Tashkent')::int AS day,
-        COUNT(*)::int AS cnt
-      FROM leads
-      WHERE uf_meeting_done_at IS NOT NULL
-        AND (uf_meeting_done_at AT TIME ZONE 'Asia/Tashkent')::date >= $1
-        AND (uf_meeting_done_at AT TIME ZONE 'Asia/Tashkent')::date <= $2
-        AND source_id = $3
-        ${meetRespFilter}
-        ${meetTargFilter}
-      GROUP BY day
-    `, meetParams);
-
-    for (const row of meetRes.rows) {
-      if (row.day >= 1 && row.day <= daysInMonth) {
-        result.target.meetings[row.day - 1] += row.cnt;
+    // Both meeting metrics come from the lead's own stage-entry timestamps, so
+    // each lands on the day it actually happened — a meeting booked in July and
+    // held in August counts once in each month, on the right day.
+    for (const [col, metric] of [['uf_meeting_set_at', 'meetings_set'], ['uf_meeting_done_at', 'meetings']]) {
+      const res = await pool.query(`
+        SELECT
+          EXTRACT(DAY FROM ${col} AT TIME ZONE 'Asia/Tashkent')::int AS day,
+          COUNT(*)::int AS cnt
+        FROM leads
+        WHERE ${col} IS NOT NULL
+          AND (${col} AT TIME ZONE 'Asia/Tashkent')::date >= $1
+          AND (${col} AT TIME ZONE 'Asia/Tashkent')::date <= $2
+          AND source_id = $3
+          ${meetRespFilter}
+          ${meetTargFilter}
+        GROUP BY day
+      `, meetParams);
+      for (const row of res.rows) {
+        if (row.day >= 1 && row.day <= daysInMonth) {
+          result.target[metric][row.day - 1] += row.cnt;
+        }
       }
     }
 

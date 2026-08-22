@@ -750,7 +750,7 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
     since = f"{year}-{month_num:02d}-01"
     until = f"{year}-{month_num:02d}-{days_in_month:02d}"
 
-    _METRICS = ["leads", "qual_leads", "meetings", "deals", "deals_sum", "sales_count", "sales_sum", "cancelled", "sifatsiz"]
+    _METRICS = ["leads", "qual_leads", "meetings_set", "meetings", "deals", "deals_sum", "sales_count", "sales_sum", "cancelled", "sifatsiz"]
     result = {"target": {m: [0.0] * days_in_month for m in _METRICS}}
     result["unmatched"] = {"sales_count": [0.0] * days_in_month, "sales_sum": [0.0] * days_in_month}
 
@@ -873,6 +873,35 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
                 continue
             result["target"]["sifatsiz"][int(day) - 1] += int(cnt)
 
+        # ── UCHRASHUV belgilandi / o'tkazildi ────────────────────────────
+        # Bitrix stamps the moment a lead enters each stage:
+        #   UF_CRM_1770693781846 → "Uchrashuv belgilandi"  (booked)
+        #   UF_CRM_1770695429433 → "Uchrashuv o'tkazildi"  (held)
+        # Counting on those timestamps means each lands on the day it actually
+        # happened — a meeting booked in July and held in August is counted
+        # once in each month, on the right day.
+        for col, metric in (("uf_meeting_set_at", "meetings_set"),
+                            ("uf_meeting_done_at", "meetings")):
+            meet_params: dict = {"since": since, "until": until, "src": TARGET_SRC}
+            if resp_ids:
+                meet_params["resp_ids"] = resp_ids
+            meet_campaign_filter = _build_campaign_filter("l", meet_params)
+            meet_sql = _text(f"""
+                SELECT EXTRACT(DAY FROM l.{col} AT TIME ZONE 'Asia/Tashkent')::int AS day,
+                       COUNT(*) AS cnt
+                FROM leads l
+                WHERE l.{col} IS NOT NULL
+                  AND (l.{col} AT TIME ZONE 'Asia/Tashkent')::date BETWEEN :since AND :until
+                  AND l.source_id = :src
+                  {meet_campaign_filter}
+                  {resp_lead}
+                GROUP BY 1
+            """)
+            for day, cnt in conn.execute(meet_sql, meet_params):
+                if day is None or day < 1 or day > days_in_month:
+                    continue
+                result["target"][metric][int(day) - 1] += int(cnt)
+
         # ── DEAL metrics (meetings, shartnoma) by date_create ───────────
         deal_params: dict = {"since": since, "until": until, "src": TARGET_SRC}
         if resp_ids:
@@ -902,10 +931,9 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
             # NB: open deals must NOT be added to qual_leads — "Maqsadli lidlar
             # soni" counts leads, and every open deal here already comes from a
             # lead that the query above counted.
-            # Every deal in this pipeline (category_id=0) is created AT the
-            # "Uchrashuv o'tkazildi" stage, so any deal that exists — regardless
-            # of its current stage — already had its meeting counted once.
-            result["target"]["meetings"][idx] += 1
+            # meetings come from the lead's own stage-entry timestamps above,
+            # not from deals: a meeting that produced no deal still happened,
+            # and a deal's creation day is not the day of the meeting.
             if stage_bid == "UC_W35V62" or is_won:
                 result["target"]["deals"][idx] += 1
                 result["target"]["deals_sum"][idx] += float(opp)
@@ -1159,7 +1187,7 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
             result["unmatched"]["sales_sum"][int(day) - 1] += float(opp)
 
     # Convert float arrays to int where appropriate
-    int_keys = {"leads", "qual_leads", "meetings", "deals", "sales_count", "cancelled", "sifatsiz"}
+    int_keys = {"leads", "qual_leads", "meetings_set", "meetings", "deals", "sales_count", "cancelled", "sifatsiz"}
     for sec in result.values():
         for k in int_keys:
             if k in sec:
@@ -1382,7 +1410,7 @@ def api_marketing_kunlik_segment(section_id: int, month: str, year: int, respons
     resp_filter_lead = "AND l.responsible_id = ANY(:resp_ids)" if resp_ids else ""
     resp_filter_deal = "AND d.responsible_id = ANY(:resp_ids)" if resp_ids else ""
 
-    _METRICS = ["leads", "qual_leads", "meetings", "deals", "deals_sum", "sales_count", "sales_sum", "cancelled", "sifatsiz"]
+    _METRICS = ["leads", "qual_leads", "meetings_set", "meetings", "deals", "deals_sum", "sales_count", "sales_sum", "cancelled", "sifatsiz"]
     result = {m: [0.0] * days_in_month for m in _METRICS}
 
     _QUAL_STAGES = {"IN_PROCESS", "PROCESSED", "UC_1KPATX", "UC_Q2U9EL", "UC_KXC3ZW", "UC_L28G68", "CONVERTED"}
@@ -1423,24 +1451,28 @@ def api_marketing_kunlik_segment(section_id: int, month: str, year: int, respons
         # Counting deals instead dated the meeting by the DEAL's creation day
         # and missed every meeting that produced no deal. The day comes from the
         # meeting date, so a lead created last month still lands on the right day.
+        # Both land on the day they actually happened, so a meeting booked in
+        # July and held in August counts once in each month, on the right day.
         if lead_col and source_names:
-            meet_sql = _text(f"""
-                SELECT
-                    EXTRACT(DAY FROM l.uf_meeting_done_at AT TIME ZONE 'Asia/Tashkent')::int AS day,
-                    COUNT(*) AS cnt
-                FROM leads l
-                WHERE l.uf_meeting_done_at IS NOT NULL
-                  AND (l.uf_meeting_done_at AT TIME ZONE 'Asia/Tashkent')::date
-                      BETWEEN :since AND :until
-                  AND l.{lead_col} = ANY(:names)
-                  {resp_filter_lead}
-                GROUP BY 1
-            """)
-            params = {"since": since, "until": until, "names": source_names}
-            if resp_ids: params["resp_ids"] = resp_ids
-            for day, cnt in conn.execute(meet_sql, params):
-                if day and 1 <= day <= days_in_month:
-                    result["meetings"][int(day) - 1] += int(cnt)
+            for col, metric in (("uf_meeting_set_at", "meetings_set"),
+                                ("uf_meeting_done_at", "meetings")):
+                meet_sql = _text(f"""
+                    SELECT
+                        EXTRACT(DAY FROM l.{col} AT TIME ZONE 'Asia/Tashkent')::int AS day,
+                        COUNT(*) AS cnt
+                    FROM leads l
+                    WHERE l.{col} IS NOT NULL
+                      AND (l.{col} AT TIME ZONE 'Asia/Tashkent')::date
+                          BETWEEN :since AND :until
+                      AND l.{lead_col} = ANY(:names)
+                      {resp_filter_lead}
+                    GROUP BY 1
+                """)
+                params = {"since": since, "until": until, "names": source_names}
+                if resp_ids: params["resp_ids"] = resp_ids
+                for day, cnt in conn.execute(meet_sql, params):
+                    if day and 1 <= day <= days_in_month:
+                        result[metric][int(day) - 1] += int(cnt)
 
         # ── Deal metrics: leads+qual_leads=total deals, meetings, shartnoma
         if deal_col and source_names:
@@ -1523,7 +1555,7 @@ def api_marketing_kunlik_segment(section_id: int, month: str, year: int, respons
                     continue
                 result["sales_sum"][int(day) - 1] += float(opp)
 
-    int_keys = {"leads", "qual_leads", "meetings", "deals", "sales_count", "cancelled", "sifatsiz"}
+    int_keys = {"leads", "qual_leads", "meetings_set", "meetings", "deals", "sales_count", "cancelled", "sifatsiz"}
     for k in int_keys:
         result[k] = [int(v) for v in result[k]]
 

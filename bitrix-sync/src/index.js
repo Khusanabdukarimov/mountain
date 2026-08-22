@@ -145,6 +145,9 @@ Promise.all([
   // "Tashrif buyurdiga tushgan sana" (UF_CRM_1770695429433) — the moment the
   // meeting was held. Uchrashuvlar soni is counted on this date.
   pool.query(`
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS uf_meeting_set_at  TIMESTAMPTZ;
+    CREATE INDEX IF NOT EXISTS leads_meeting_set_idx ON leads(uf_meeting_set_at)
+      WHERE uf_meeting_set_at IS NOT NULL;
     ALTER TABLE leads ADD COLUMN IF NOT EXISTS uf_meeting_done_at TIMESTAMPTZ;
     CREATE INDEX IF NOT EXISTS leads_meeting_done_idx ON leads(uf_meeting_done_at)
       WHERE uf_meeting_done_at IS NOT NULL;

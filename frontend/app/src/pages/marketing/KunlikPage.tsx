@@ -23,7 +23,7 @@ type Section = string;
 const CUSTOM_COLORS = ["#6366f1", "#0891b2", "#059669", "#d97706", "#dc2626", "#7c3aed", "#be185d"];
 
 type MetricKey =
-  | "budget" | "leads" | "qual_leads" | "meetings"
+  | "budget" | "leads" | "qual_leads" | "meetings_set" | "meetings" | "meeting_conversion"
   | "deals"  | "deals_sum" | "sales_count" | "sales_sum" | "cancelled"
   | "sifatsiz"
   | "tolangan"
@@ -42,7 +42,9 @@ const METRICS: MetricDef[] = [
   { key: "qual_leads",     label: "Maqsadli lidlar soni", format: "num"   },
   { key: "qual_lead_cost",   label: "Maqsadli lid narxi",       format: "money", computed: true },
   { key: "qual_conversion",  label: "Maqsadli lid konversiya",  format: "pct",   computed: true },
-  { key: "meetings",         label: "Uchrashuvlar soni",        format: "num"   },
+  { key: "meetings_set",       label: "Uchrashuv belgilandi",     format: "num"  },
+  { key: "meetings",           label: "Uchrashuv o'tkazildi",     format: "num"  },
+  { key: "meeting_conversion", label: "Uchrashuv konversiya",     format: "pct", computed: true },
   { key: "deals",          label: "Kelishuvlar soni",     format: "num"   },
   { key: "deals_sum",      label: "Kelishuvlar summasi",  format: "money" },
   { key: "sales_count",    label: "Sotuvlar soni",        format: "num"   },
@@ -127,7 +129,7 @@ export default function KunlikPage() {
   const autoData = useMemo(() => {
     const empty = () => Array(days).fill(0) as number[];
     type DataMap = {
-      budget: number[]; leads: number[]; qual_leads: number[]; meetings: number[];
+      budget: number[]; leads: number[]; qual_leads: number[]; meetings_set: number[]; meetings: number[];
       deals: number[]; deals_sum: number[]; sales_count: number[]; sales_sum: number[]; cancelled: number[]; sifatsiz: number[];
     };
     const buildTarget = (): DataMap => {
@@ -142,6 +144,7 @@ export default function KunlikPage() {
         budget:      combinedBudget,
         leads:       (crm?.leads       ?? empty()) as number[],
         qual_leads:  (crm?.qual_leads  ?? empty()) as number[],
+        meetings_set:(crm?.meetings_set ?? empty()) as number[],
         meetings:    (crm?.meetings    ?? empty()) as number[],
         deals:       (crm?.deals       ?? empty()) as number[],
         deals_sum:   (crm?.deals_sum   ?? empty()) as number[],
@@ -155,6 +158,7 @@ export default function KunlikPage() {
       budget:      empty(),
       leads:       ((d as { leads?: number[] })?.leads       ?? empty()) as number[],
       qual_leads:  ((d as { qual_leads?: number[] })?.qual_leads  ?? empty()) as number[],
+      meetings_set:((d as { meetings_set?: number[] })?.meetings_set ?? empty()) as number[],
       meetings:    ((d as { meetings?: number[] })?.meetings    ?? empty()) as number[],
       deals:       ((d as { deals?: number[] })?.deals       ?? empty()) as number[],
       deals_sum:   ((d as { deals_sum?: number[] })?.deals_sum   ?? empty()) as number[],
@@ -169,7 +173,7 @@ export default function KunlikPage() {
     customSections.forEach((sec, idx) => {
       const d = customSegmentQueries[idx]?.data?.data;
       result[String(sec.id)] = d ? buildCustom(d as never) : {
-        budget: empty(), leads: empty(), qual_leads: empty(), meetings: empty(),
+        budget: empty(), leads: empty(), qual_leads: empty(), meetings_set: empty(), meetings: empty(),
         deals: empty(), deals_sum: empty(), sales_count: empty(), sales_sum: empty(), cancelled: empty(), sifatsiz: empty(),
       };
     });
@@ -180,7 +184,7 @@ export default function KunlikPage() {
   const overrides = (qPlan.data?.overrides ?? {}) as Record<string, Partial<Record<string, Record<number, number>>>>;
 
   function cellValue(src: Section, metric: MetricDef, i: number): number {
-    const b   = autoData[src] ?? { budget: [], leads: [], qual_leads: [], meetings: [], deals: [], deals_sum: [], sales_count: [], sales_sum: [], cancelled: [], sifatsiz: [] };
+    const b   = autoData[src] ?? { budget: [], leads: [], qual_leads: [], meetings_set: [], meetings: [], deals: [], deals_sum: [], sales_count: [], sales_sum: [], cancelled: [], sifatsiz: [] };
     const ov  = overrides[src]?.[metric.key];
     const day = i + 1;
     if (!metric.computed && ov?.[day] !== undefined) return ov[day];
@@ -193,6 +197,7 @@ export default function KunlikPage() {
       case "budget":      return field("budget",      b.budget);
       case "leads":       return field("leads",       b.leads);
       case "qual_leads":  return field("qual_leads",  b.qual_leads);
+      case "meetings_set": return field("meetings_set", b.meetings_set);
       case "meetings":    return field("meetings",    b.meetings);
       case "deals":       return field("deals",       b.deals);
       case "deals_sum":   return field("deals_sum",   b.deals_sum);
@@ -211,6 +216,11 @@ export default function KunlikPage() {
       case "qual_conversion": {
         const l = field("leads", b.leads), q = field("qual_leads", b.qual_leads);
         return l > 0 ? (q / l) * 100 : 0;
+      }
+      // Of the meetings booked, how many were actually held.
+      case "meeting_conversion": {
+        const s = field("meetings_set", b.meetings_set), d = field("meetings", b.meetings);
+        return s > 0 ? (d / s) * 100 : 0;
       }
       case "customer_cost": {
         const bg = field("budget", b.budget), sc = field("sales_count", b.sales_count);
@@ -236,6 +246,10 @@ export default function KunlikPage() {
       case "qual_conversion": {
         const l = sumField("leads"), q = sumField("qual_leads");
         return l > 0 ? (q / l) * 100 : 0;
+      }
+      case "meeting_conversion": {
+        const s = sumField("meetings_set"), d = sumField("meetings");
+        return s > 0 ? (d / s) * 100 : 0;
       }
       case "customer_cost": {
         const bg = sumField("budget"), sc = sumField("sales_count");

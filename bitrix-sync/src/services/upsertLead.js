@@ -129,12 +129,13 @@ async function upsertLead(r, client) {
        uf_amo_date,
        uf_cancel_reason, uf_junk_reason,
        uf_report_stage,
+       uf_meeting_set_at,
        uf_meeting_done_at,
        name, last_name, title,
        web_form_id,
        date_create, date_modify, synced_at
      ) VALUES (
-       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,NOW()
+       $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,NOW()
      )
      ON CONFLICT (id) DO UPDATE SET
        responsible_id    = EXCLUDED.responsible_id,
@@ -156,6 +157,7 @@ async function upsertLead(r, client) {
        uf_cancel_reason  = EXCLUDED.uf_cancel_reason,
        uf_junk_reason    = EXCLUDED.uf_junk_reason,
        uf_report_stage   = EXCLUDED.uf_report_stage,
+       uf_meeting_set_at  = EXCLUDED.uf_meeting_set_at,
        uf_meeting_done_at = EXCLUDED.uf_meeting_done_at,
        name             = EXCLUDED.name,
        last_name        = EXCLUDED.last_name,
@@ -188,6 +190,10 @@ async function upsertLead(r, client) {
       // deliberately NOT derived from STATUS_ID: the two are allowed to disagree,
       // which is the whole point of the client asking for a separate field.
       ufVal(r.UF_CRM_1771440293231),
+      // "Tashrif belgilandiga tushgan sana" — when the meeting was BOOKED
+      // ("Uchrashuv belgilandi"). Kept as a real timestamp alongside the older
+      // uf_tashrif_sanasi TEXT copy, which other endpoints still read.
+      parseDate(r.UF_CRM_1770693781846),
       // "Tashrif buyurdiga tushgan sana" — when the lead entered the
       // "Konsultatsiya o'tkazildi" stage, i.e. when the meeting actually
       // happened. This is the date Uchrashuvlar soni is counted on; it is
