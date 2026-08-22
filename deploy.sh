@@ -143,7 +143,12 @@ if $DEPLOY_FRONTEND; then
     ok "  Dependencies installed"
 
     info "  Vite build (local)..."
-    (cd "$LOCAL_FRONTEND" && npm run build 2>&1 | tail -5)
+    # Piping to tail made the pipeline's exit status tail's, so a failed build
+    # (tsc error) went unnoticed and the NEXT step rsynced the previous, stale
+    # dist — then printed "Deploy successful". Keep the tail for brevity, but
+    # take the build's own status via PIPESTATUS and stop if it failed.
+    (cd "$LOCAL_FRONTEND" && npm run build 2>&1 | tail -15; exit "${PIPESTATUS[0]}") \
+      || err "  Build FAILED — deploy aborted, server still serves the previous build"
     ok "  Build complete"
 
     info "  Uploading dist → server..."

@@ -314,6 +314,10 @@ export default function KunlikPage() {
         const l = sumField("leads"), q = sumField("qual_leads");
         return l > 0 ? (q / l) * 100 : 0;
       }
+      case "meeting_conversion": {
+        const s = sumField("meetings_set"), d = sumField("meetings");
+        return s > 0 ? (d / s) * 100 : 0;
+      }
       case "customer_cost": {
         const bg = sumField("budget"), sc = sumField("sales_count");
         return sc > 0 ? bg / sc : 0;
@@ -345,6 +349,10 @@ export default function KunlikPage() {
       case "qual_conversion": {
         const l = sumDays("leads"), q = sumDays("qual_leads");
         return l > 0 ? (q / l) * 100 : 0;
+      }
+      case "meeting_conversion": {
+        const s = sumDays("meetings_set"), d = sumDays("meetings");
+        return s > 0 ? (d / s) * 100 : 0;
       }
       case "customer_cost": {
         const bg = sumDays("budget"), sc = sumDays("sales_count");
