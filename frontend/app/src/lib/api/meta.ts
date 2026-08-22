@@ -35,6 +35,9 @@ export type BitrixDailyResponse = {
 export type KunlikRow = {
   leads: number[];
   qual_leads: number[];
+  /** "Uchrashuv belgilandi" — counted on the day the meeting was booked. */
+  meetings_set: number[];
+  /** "Uchrashuv o'tkazildi" — counted on the day the meeting was held. */
   meetings: number[];
   deals: number[];
   deals_sum: number[];
