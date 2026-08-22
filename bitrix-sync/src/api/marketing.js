@@ -168,6 +168,10 @@ router.get('/kunlik', async (req, res) => {
       WHERE (d.date_create AT TIME ZONE 'Asia/Tashkent')::date >= $1
         AND (d.date_create AT TIME ZONE 'Asia/Tashkent')::date <= $2
         AND d.source_id = $3
+        -- Main sales pipeline only. Without this, deals from other pipelines
+        -- ("Yangi proyekt", category 12 — 17 of them in August) leaked into
+        -- meetings/sales/cancelled. The custom sections already filter this way.
+        AND d.category_id = 0
         ${dealRespFilter}
         ${dealTargFilterStr}
     `, dealParams);
@@ -177,9 +181,8 @@ router.get('/kunlik', async (req, res) => {
       const i   = row.day - 1;
       const opp = parseFloat(row.opp) || 0;
 
-      if (row.stage_bid === 'NEW') {
-        result.target.meetings[i]++;
-      }
+      // meetings are counted from the lead's own "Konsultatsiya o'tkazildi"
+      // timestamp (see below), not from deals.
       // Sotuv bo'ldi = won deals by date_create
       if (row.is_won) {
         result.target.sales_count[i]++;
@@ -187,6 +190,36 @@ router.get('/kunlik', async (req, res) => {
       }
       if (row.is_final && !row.is_won) {
         result.target.cancelled[i]++;
+      }
+    }
+
+    // ── 3b. Uchrashuvlar: lidning "Konsultatsiya o'tkazildi" sanasi ────────
+    // Bitrix writes UF_CRM_1770695429433 ("Tashrif buyurdiga tushgan sana") the
+    // moment a lead enters that stage, which is exactly when the meeting was
+    // held. Counting deals instead was wrong twice over: a deal only exists if
+    // the meeting produced one, and it was dated by the DEAL's creation day.
+    // Note the day comes from the meeting date, so a lead created last month
+    // still lands on the day its meeting actually happened.
+    const meetParams = [monthStart, monthEnd, TARGET_SRC];
+    const meetRespFilter = respFilter(meetParams);
+    const meetTargFilter = leadTargFilter(meetParams);
+    const meetRes = await pool.query(`
+      SELECT
+        EXTRACT(DAY FROM uf_meeting_done_at AT TIME ZONE 'Asia/Tashkent')::int AS day,
+        COUNT(*)::int AS cnt
+      FROM leads
+      WHERE uf_meeting_done_at IS NOT NULL
+        AND (uf_meeting_done_at AT TIME ZONE 'Asia/Tashkent')::date >= $1
+        AND (uf_meeting_done_at AT TIME ZONE 'Asia/Tashkent')::date <= $2
+        AND source_id = $3
+        ${meetRespFilter}
+        ${meetTargFilter}
+      GROUP BY day
+    `, meetParams);
+
+    for (const row of meetRes.rows) {
+      if (row.day >= 1 && row.day <= daysInMonth) {
+        result.target.meetings[row.day - 1] += row.cnt;
       }
     }
 
@@ -203,6 +236,7 @@ router.get('/kunlik', async (req, res) => {
       WHERE d.source_id = $3
         AND (d.date_create AT TIME ZONE 'Asia/Tashkent')::date >= $1
         AND (d.date_create AT TIME ZONE 'Asia/Tashkent')::date <= $2
+        AND d.category_id = 0
         ${kelRespFilter}
         ${kelTargFilter}
         AND (

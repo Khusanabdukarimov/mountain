@@ -1417,6 +1417,31 @@ def api_marketing_kunlik_segment(section_id: int, month: str, year: int, respons
                 if stage_bid in _SIFATSIZ_STAGES:
                     result["sifatsiz"][idx] += int(cnt)
 
+        # ── Uchrashuvlar: the lead's own "Konsultatsiya o'tkazildi" date ──
+        # Bitrix stamps UF_CRM_1770695429433 ("Tashrif buyurdiga tushgan sana")
+        # when a lead enters that stage — that is when the meeting happened.
+        # Counting deals instead dated the meeting by the DEAL's creation day
+        # and missed every meeting that produced no deal. The day comes from the
+        # meeting date, so a lead created last month still lands on the right day.
+        if lead_col and source_names:
+            meet_sql = _text(f"""
+                SELECT
+                    EXTRACT(DAY FROM l.uf_meeting_done_at AT TIME ZONE 'Asia/Tashkent')::int AS day,
+                    COUNT(*) AS cnt
+                FROM leads l
+                WHERE l.uf_meeting_done_at IS NOT NULL
+                  AND (l.uf_meeting_done_at AT TIME ZONE 'Asia/Tashkent')::date
+                      BETWEEN :since AND :until
+                  AND l.{lead_col} = ANY(:names)
+                  {resp_filter_lead}
+                GROUP BY 1
+            """)
+            params = {"since": since, "until": until, "names": source_names}
+            if resp_ids: params["resp_ids"] = resp_ids
+            for day, cnt in conn.execute(meet_sql, params):
+                if day and 1 <= day <= days_in_month:
+                    result["meetings"][int(day) - 1] += int(cnt)
+
         # ── Deal metrics: leads+qual_leads=total deals, meetings, shartnoma
         if deal_col and source_names:
             deal_sql = _text(f"""
@@ -1446,10 +1471,8 @@ def api_marketing_kunlik_segment(section_id: int, month: str, year: int, respons
                 # in the Target section (bitrix-sync/src/api/marketing.js), which
                 # has always counted leads only. Verified against Bitrix: Aug 17
                 # Instagram = 10 leads + 6 deals showed 16; Bitrix reports 10.
-                # Every deal in this pipeline (category_id=0) is created AT the
-                # "Uchrashuv o'tkazildi" stage, so any deal that exists — regardless
-                # of its current stage — already had its meeting counted once.
-                result["meetings"][idx] += 1
+                # meetings come from the lead's own "Konsultatsiya o'tkazildi"
+                # timestamp (see below), not from deals.
                 if stage_bid == "UC_W35V62" or is_won:
                     result["deals"][idx] += 1
                     result["deals_sum"][idx] += float(opp)

@@ -142,6 +142,13 @@ Promise.all([
     .catch(err => console.error('[startup] bitrix_api_log migration failed:', err.message)),
   // "Стадия (для отчетов)" (UF_CRM_1771440293231) — the hand-set reporting label
   // the Lid va Konversiya table's report-stage dimension groups by.
+  // "Tashrif buyurdiga tushgan sana" (UF_CRM_1770695429433) — the moment the
+  // meeting was held. Uchrashuvlar soni is counted on this date.
+  pool.query(`
+    ALTER TABLE leads ADD COLUMN IF NOT EXISTS uf_meeting_done_at TIMESTAMPTZ;
+    CREATE INDEX IF NOT EXISTS leads_meeting_done_idx ON leads(uf_meeting_done_at)
+      WHERE uf_meeting_done_at IS NOT NULL;
+  `).catch(err => console.error('[startup] uf_meeting_done_at migration failed:', err.message)),
   pool.query(`
     ALTER TABLE leads ADD COLUMN IF NOT EXISTS uf_report_stage TEXT;
     CREATE INDEX IF NOT EXISTS leads_report_stage_idx ON leads(uf_report_stage)
