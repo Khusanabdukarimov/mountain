@@ -745,17 +745,12 @@ function CreateSectionModal({ onClose, onCreated }: { onClose: () => void; onCre
     queryFn:  () => getUfFieldOptions("SOURCE_ID"),
     staleTime: Infinity,
   });
-  const ALLOWED_SOURCES = new Set([
-    "UC_3O8GTF",   // Instagram
-    "UC_BU2WXB",   // Networking
-    "UC_Y6RAXP",   // Qayta sotuv (LTV)
-    "UC_BOJPCA",   // Sovuq qo'ng'iroq
-    "UC_P8729J",   // Tavsiya orqali (NPS)
-    "UC_89FPH6",   // Target
-    "REPEAT_SALE", // Website forma
-    "CALL",        // Qo'ng'iroq (Звонок) — Bitrix telephony source
-  ]);
-  const options = (manbaData?.options ?? []).filter(o => ALLOWED_SOURCES.has(o.id));
+  // Every source Bitrix defines is offered — no local whitelist. The old
+  // hard-coded list of 8 silently hid the other 15 (Ko'chadan, Veb sayt,
+  // Telegram forma, Vakansiya, Organik tashrif...), so adding a section for
+  // any of them meant editing this file. Sources come from crm.status.list,
+  // so a source added in Bitrix shows up here on its own.
+  const options = manbaData?.options ?? [];
 
   const handleSelect = (id: string) => {
     const prev = options.find(o => o.id === selected)?.label ?? "";
