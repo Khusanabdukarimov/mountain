@@ -1,7 +1,7 @@
 import { useMemo, useState, useRef, useEffect } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
-  RefreshCw, Search, ChevronDown, TrendingUp, Filter, X, Download, Calendar,
+  RefreshCw, Search, ChevronDown, TrendingUp, Filter, X, Download, Calendar, ImageOff,
 } from "lucide-react";
 import { DateRangePicker } from "@/components/DateRangePicker";
 import * as XLSX from "xlsx";
@@ -1332,13 +1332,29 @@ const formDbStatsMap = useMemo(() => {
                                 className={`border-b border-border/50 hover:bg-bg3/30 cursor-pointer ${isExpAd ? "bg-bg3/20" : ""}`}
                                 onClick={() => { setExpandedCreative(isExpAd ? null : adKey); setExpandedSotuv(null); }}>
                                 <td className={TD}>
-                                  <div className="flex items-center gap-1.5">
+                                  <div className="flex items-center gap-2">
                                     <ChevronDown size={11} className={`text-text3 shrink-0 transition-transform ${isExpAd ? "rotate-180" : ""}`} />
+                                    {r.thumbnail_url ? (
+                                      <img
+                                        src={r.thumbnail_url}
+                                        alt=""
+                                        loading="lazy"
+                                        className="w-9 h-9 rounded object-cover shrink-0 bg-bg3"
+                                        // Meta's thumbnail_url occasionally 404s (creative deleted,
+                                        // token scope) — fall back to the placeholder instead of a
+                                        // broken-image icon.
+                                        onError={e => { (e.currentTarget as HTMLImageElement).style.display = "none"; }}
+                                      />
+                                    ) : (
+                                      <div className="w-9 h-9 rounded shrink-0 bg-bg3 flex items-center justify-center">
+                                        <ImageOff size={13} className="text-text3" />
+                                      </div>
+                                    )}
                                     <div className="flex flex-col gap-0.5 min-w-0">
                                       {r.ad_name ? (
                                         <a href={r.post_url ?? undefined} target="_blank" rel="noreferrer"
                                           onClick={e => e.stopPropagation()}
-                                          className="text-blue hover:underline text-[11px] truncate max-w-[280px] block" title={r.ad_name}>
+                                          className="text-blue hover:underline text-[11px] truncate max-w-[240px] block" title={r.ad_name}>
                                           {r.ad_name}
                                         </a>
                                       ) : (

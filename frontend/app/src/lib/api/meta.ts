@@ -327,6 +327,7 @@ export type CreativeRow = {
   ad_id:         string | null;
   ad_name:       string | null;
   post_url:      string | null;
+  thumbnail_url: string | null;
   spend:         number;
   impressions:   number;
   hook_views:    number;

@@ -81,6 +81,7 @@ pool.query(`
     video_id                    TEXT,
     video_title                 TEXT,
     post_url                    TEXT,
+    thumbnail_url                TEXT,
     ads_manager_url              TEXT,
     creative_platform            TEXT,        -- 'instagram' | 'facebook' | 'unpublished'
     facebook_post_url            TEXT,
@@ -98,6 +99,7 @@ pool.query(`
   ALTER TABLE meta_creative_cache ADD COLUMN IF NOT EXISTS video_source_url             TEXT;
   ALTER TABLE meta_creative_cache ADD COLUMN IF NOT EXISTS effective_object_story_id    TEXT;
   ALTER TABLE meta_creative_cache ADD COLUMN IF NOT EXISTS effective_instagram_media_id TEXT;
+  ALTER TABLE meta_creative_cache ADD COLUMN IF NOT EXISTS thumbnail_url                TEXT;
 `).catch(err => console.error('[campaigns] meta_creative_cache migration:', err.message));
 
 pool.query(`
@@ -988,6 +990,43 @@ async function upsertLead(lead, formId, pageId) {
   );
 }
 
+// Ad-account -> lead-gen-form-id mapping, refreshed independently of
+// syncAllLeads' 5-min cadence (see the call site below for why).
+const AD_FORMS_TTL_MS = 30 * 60 * 1000; // 30 min
+let adFormsCache = null;   // Set<string> | null
+let adFormsCacheAt = 0;
+
+async function getAdFormIds() {
+  if (adFormsCache && Date.now() - adFormsCacheAt < AD_FORMS_TTL_MS) return adFormsCache;
+  const found = new Set();
+  for (const acct of allAccountIds()) {
+    try {
+      const ads = await paginate(`${BASE}/${acct}/ads`, {
+        access_token: token(),
+        fields: 'creative{object_story_spec}',
+        limit: 200,
+        filtering: JSON.stringify([{ field: 'campaign.objective', operator: 'IN', value: ['OUTCOME_LEADS', 'LEAD_GENERATION'] }]),
+      });
+      for (const ad of ads) {
+        const spec = ad.creative?.object_story_spec || {};
+        for (const section of ['video_data', 'link_data']) {
+          const fid = spec[section]?.call_to_action?.value?.lead_gen_form_id;
+          if (fid) found.add(fid);
+        }
+      }
+      console.log(`[sync-leads] Account ${acct}: ads fetched`);
+    } catch (err) {
+      console.warn(`[sync-leads] Could not fetch ads from ${acct}:`, err.message);
+      // A failed refresh keeps serving the previous cache (if any) rather than
+      // an empty set — one rate-limited run should not blank out known forms.
+      if (adFormsCache) return adFormsCache;
+    }
+  }
+  adFormsCache = found;
+  adFormsCacheAt = Date.now();
+  return found;
+}
+
 async function syncAllLeads() {
   if (syncRunning) return { skipped: true, reason: 'Already running' };
   syncRunning = true;
@@ -1002,27 +1041,14 @@ async function syncAllLeads() {
     const { rows: dbForms } = await pool.query('SELECT DISTINCT form_id FROM facebook_leads WHERE form_id IS NOT NULL');
     for (const r of dbForms) formIds.add(r.form_id);
 
-    // 2. Collect form IDs from Meta Ads API (all configured ad accounts)
-    for (const acct of allAccountIds()) {
-      try {
-        const ads = await paginate(`${BASE}/${acct}/ads`, {
-          access_token: token(),
-          fields: 'creative{object_story_spec}',
-          limit: 200,
-          filtering: JSON.stringify([{ field: 'campaign.objective', operator: 'IN', value: ['OUTCOME_LEADS', 'LEAD_GENERATION'] }]),
-        });
-        for (const ad of ads) {
-          const spec = ad.creative?.object_story_spec || {};
-          for (const section of ['video_data', 'link_data']) {
-            const fid = spec[section]?.call_to_action?.value?.lead_gen_form_id;
-            if (fid) formIds.add(fid);
-          }
-        }
-        console.log(`[sync-leads] Account ${acct}: ads fetched`);
-      } catch (err) {
-        console.warn(`[sync-leads] Could not fetch ads from ${acct}:`, err.message);
-      }
-    }
+    // 2. Collect form IDs from Meta Ads API (all configured ad accounts).
+    // /ads is on Meta's "ads-management" rate-limit pool, which act_932239158316127
+    // was hitting constantly (155x/day) — ad creatives don't change minute to
+    // minute, so refreshing this every 5 min (syncAllLeads' own cadence, needed
+    // for the lead ingestion below) was needlessly frequent. Cached with its own
+    // TTL instead: the ad->form mapping only needs to catch up when a new ad or
+    // form actually goes live, not every run.
+    for (const fid of await getAdFormIds()) formIds.add(fid);
 
     // 2.5. Collect form IDs from Page (Page Token) — catches standalone forms like "Filtr - RM"
     const pageToken = process.env.FB_PAGE_TOKEN;
@@ -1041,23 +1067,10 @@ async function syncAllLeads() {
       }
     }
 
-    // 2.6. Collect form IDs directly from ad accounts (no page token needed)
-    // Catches new forms not yet linked to any ad creative
-    for (const acct of allAccountIds()) {
-      try {
-        const acctForms = await paginate(`${BASE}/${acct}/leadgen_forms`, {
-          access_token: token(),
-          fields: 'id,name,status',
-          limit: 100,
-        });
-        for (const f of acctForms) {
-          if (f.id) formIds.add(f.id);
-        }
-        console.log(`[sync-leads] Account ${acct}: ${acctForms.length} leadgen forms found`);
-      } catch (err) {
-        console.warn(`[sync-leads] Could not fetch leadgen_forms from ${acct}:`, err.message);
-      }
-    }
+    // (removed) step 2.6 used to call `${acct}/leadgen_forms` — that edge only
+    // exists on a Page object in the Graph API, never on an ad account, so
+    // this call 400'd on every single run (306x/day, 100% failure) for zero
+    // benefit. Forms are already covered by 2.5 (Page Token) and step 1 (DB).
 
     console.log(`[sync-leads] Syncing ${formIds.size} forms...`);
 
@@ -1348,7 +1361,7 @@ router.get('/creatives', async (req, res) => {
     const creativeMap = {};
     if (adIds.length) {
       const { rows: crRows } = await pool.query(
-        `SELECT ad_id, creative_name, video_title, post_url, ads_manager_url, creative_platform FROM meta_creative_cache WHERE ad_id = ANY($1)`,
+        `SELECT ad_id, creative_name, video_title, post_url, ads_manager_url, creative_platform, thumbnail_url FROM meta_creative_cache WHERE ad_id = ANY($1)`,
         [adIds]
       );
       for (const cr of crRows) creativeMap[cr.ad_id] = cr;
@@ -1363,6 +1376,7 @@ router.get('/creatives', async (req, res) => {
       ad_id:         r.ad_id || null,
       ad_name:       displayName,
       post_url:        cr.post_url || null,
+      thumbnail_url:   cr.thumbnail_url || null,
       ads_manager_url: cr.ads_manager_url || null,
       creative_platform: cr.creative_platform || null,
       spend:         spendMap[`${r.adset_name}|${r.campaign_name}`] ?? 0,
@@ -1725,7 +1739,7 @@ async function syncCreativeNames() {
       const res = await axios.get(`${BASE}/`, {
         params: {
           ids: ids.join(','),
-          fields: 'account_id,creative{id,name,effective_object_story_id,effective_instagram_media_id,object_story_id,video_id}',
+          fields: 'account_id,creative{id,name,thumbnail_url,effective_object_story_id,effective_instagram_media_id,object_story_id,video_id}',
           access_token: tok,
         },
         timeout: 20000,
@@ -1754,6 +1768,10 @@ async function syncCreativeNames() {
         : null;
       staged.push({
         ad_id, creativeId, name: cr.name || null, video_id: cr.video_id || null,
+        // Works for both image and video creatives — for video it's Meta's own
+        // frame-grab thumbnail, so this is the one field that covers every
+        // creative type without a second lookup.
+        thumbnailUrl: cr.thumbnail_url || null,
         igMediaId: cr.effective_instagram_media_id || null,
         storyId: cr.effective_object_story_id || cr.object_story_id || null,
         adsManagerUrl,
@@ -1808,16 +1826,17 @@ async function syncCreativeNames() {
 
       await pool.query(`
         INSERT INTO meta_creative_cache
-          (ad_id, creative_id, creative_name, video_id, video_title, post_url, ads_manager_url,
+          (ad_id, creative_id, creative_name, video_id, video_title, post_url, thumbnail_url, ads_manager_url,
            creative_platform, facebook_post_url, instagram_post_url, video_source_url,
            effective_object_story_id, effective_instagram_media_id, synced_at)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,NOW())
         ON CONFLICT (ad_id) DO UPDATE SET
           creative_id                  = EXCLUDED.creative_id,
           creative_name                = EXCLUDED.creative_name,
           video_id                     = EXCLUDED.video_id,
           video_title                  = EXCLUDED.video_title,
           post_url                     = EXCLUDED.post_url,
+          thumbnail_url                = EXCLUDED.thumbnail_url,
           ads_manager_url               = EXCLUDED.ads_manager_url,
           creative_platform            = EXCLUDED.creative_platform,
           facebook_post_url            = EXCLUDED.facebook_post_url,
@@ -1827,7 +1846,7 @@ async function syncCreativeNames() {
           effective_instagram_media_id = EXCLUDED.effective_instagram_media_id,
           synced_at                    = NOW()
       `, [
-        s.ad_id, s.creativeId, s.name, s.video_id, videoTitle, postUrl, s.adsManagerUrl,
+        s.ad_id, s.creativeId, s.name, s.video_id, videoTitle, postUrl, s.thumbnailUrl, s.adsManagerUrl,
         platform, facebookPostUrl, instagramPostUrl, videoSourceUrl,
         s.storyId, s.igMediaId,
       ]).catch(() => {});
@@ -1857,7 +1876,7 @@ async function resyncMissingPostUrls() {
     await pool.query(`
       UPDATE meta_creative_cache
       SET synced_at = '2000-01-01'
-      WHERE post_url IS NULL AND creative_id IS NOT NULL
+      WHERE (post_url IS NULL OR thumbnail_url IS NULL) AND creative_id IS NOT NULL
         AND synced_at < NOW() - INTERVAL '6 hours'
     `);
   } catch (_) {}
