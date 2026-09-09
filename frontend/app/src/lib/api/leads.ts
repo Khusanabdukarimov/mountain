@@ -615,10 +615,16 @@ export type PyResponsibleCallStats = {
   missed_inbound:    number;
   missed_recalled:   number;
   missed_unrecalled: number;
+  // OnlinePBX reports two distinct measures and the panel shows both:
+  //   *_duration    разговоров          — Σ talk_time, live conversation only
+  //   call_dur_*    длительность звонков — Σ duration, the whole call
   total_duration:    number;
   avg_duration:      number;
   inbound_duration:  number;
   outbound_duration: number;
+  call_dur_in?:      number;
+  call_dur_out?:     number;
+  call_dur_total?:   number;
   unique_inbound:    number;
   unique_outbound:   number;
   unique_total:      number;

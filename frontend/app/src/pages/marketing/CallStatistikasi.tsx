@@ -35,6 +35,22 @@ function fmtDurMin(secs: number): string {
   return frac > 0 ? `${m},${frac} min` : `${m} min`;
 }
 
+/** Operator table paging, matching the lead board: first 12, then 8 at a time. */
+const OPS_INITIAL = 12;
+const OPS_STEP = 8;
+
+/**
+ * Auto-refresh cadence, matched to CALL_SYNC_INTERVAL_MIN on the server (15 min)
+ * — there is nothing newer to fetch between PBX pulls.
+ *
+ * Needed because the app sets refetchOnWindowFocus:false and staleTime alone is
+ * not a timer: without this a page left open on an operator's screen would show
+ * the same numbers all day, even as calls kept landing in the database.
+ * refetchIntervalInBackground stays off (the default), so a hidden tab does not
+ * poll.
+ */
+const REFRESH_MS = 15 * 60_000;
+
 function fmtPct(pct: number): string {
   if (pct > 0 && pct < 1) return "<1%";
   return `${Math.round(pct)}%`;
@@ -227,23 +243,44 @@ const CALL_TYPE_LABEL: Record<number, { label: string; color: string }> = {
   4: { label: "Callback",  color: "#607D8B" },
 };
 
+/**
+ * One operator's calls, rendered inline under their row.
+ *
+ * Deliberately NOT a fixed-height scroll box: a 64vh inner scroller with
+ * `overscroll-contain` swallowed the wheel and pinned the page, so the other
+ * operators were unreachable. Like the lead board, it grows with the content
+ * and pages 10 at a time instead.
+ */
+const CALLS_PAGE = 10;
+
 function CallSubTable({ responsibleId, filter }: { responsibleId: number; filter: CallDashboardFilter }) {
-  const q = useQuery({ queryKey: ["call-list", responsibleId, filter], queryFn: () => getCallList(responsibleId, filter) });
+  const q = useQuery({
+    queryKey: ["call-list", responsibleId, filter],
+    queryFn: () => getCallList(responsibleId, filter),
+    refetchInterval: REFRESH_MS,
+  });
+  const [visible, setVisible] = useState(CALLS_PAGE);
+  useEffect(() => { setVisible(CALLS_PAGE); }, [responsibleId, filter]);
+
   if (q.isLoading) return <div style={{ padding: 24, textAlign: "center", color: "var(--text2)", fontSize: 13 }}>Yuklanmoqda...</div>;
   const calls = q.data ?? [];
   if (!calls.length) return <div style={{ padding: 24, textAlign: "center", color: "var(--text2)", fontSize: 13 }}>Qo'ng'iroqlar topilmadi</div>;
+
+  const shown = calls.slice(0, visible);
+  const totalSecs = calls.reduce((s, c) => s + (c.duration ?? 0), 0);
+
   return (
-    <div style={{ maxHeight: "min(64vh, 640px)", overflow: "auto", overscrollBehavior: "contain", borderTop: "1px solid var(--border)" }}>
+    <div style={{ borderTop: "1px solid var(--border)", overflowX: "auto" }}>
       <table style={{ width: "100%", minWidth: 1180, borderCollapse: "collapse", fontSize: 12.5 }}>
         <thead>
           <tr style={{ background: "rgba(33,150,243,0.05)" }}>
             {["#","Telefon","Turi","Davomiylik","Sana va vaqt","Status","Lead","Bosqich"].map((h) => (
-              <th key={h} style={{ position: "sticky", top: 0, zIndex: 1, padding: "8px 14px", textAlign: "left", fontWeight: 600, color: "var(--text2)", background: "var(--bg2)", borderBottom: "1px solid var(--border)", whiteSpace: "nowrap" }}>{h}</th>
+              <th key={h} style={{ padding: "8px 14px", textAlign: "left", fontWeight: 600, color: "var(--text2)", background: "var(--bg2)", borderBottom: "1px solid var(--border)", whiteSpace: "nowrap" }}>{h}</th>
             ))}
           </tr>
         </thead>
         <tbody>
-          {calls.map((c, i) => {
+          {shown.map((c, i) => {
             const ct = c.call_type ? CALL_TYPE_LABEL[c.call_type] : null;
             const ok = c.status_code === 200 || (c.duration ?? 0) >= 10;
             const stageLabel = c.stage_bitrix_id ? (CALL_STAGE_LABELS[c.stage_bitrix_id] ?? c.stage_name ?? c.stage_bitrix_id) : (c.stage_name ?? null);
@@ -260,8 +297,30 @@ function CallSubTable({ responsibleId, filter }: { responsibleId: number; filter
               </tr>
             );
           })}
+          {/* JAMI — mirrors the lead board: how many of how many, plus the total. */}
+          <tr style={{ background: "rgba(33,150,243,0.06)", borderTop: "1px solid var(--border)" }}>
+            <td style={{ padding: "9px 14px", fontSize: 12, fontWeight: 700, color: "var(--text3)", textTransform: "uppercase" }}>JAMI</td>
+            <td colSpan={2} style={{ padding: "9px 14px", fontSize: 12, color: "var(--text3)" }}>
+              {shown.length} / {calls.length} ta qo'ng'iroq ko'rsatilmoqda
+            </td>
+            <td style={{ padding: "9px 14px", fontFamily: "monospace", fontWeight: 700, color: "var(--text)" }}>{fmtDur(totalSecs)}</td>
+            <td colSpan={4} />
+          </tr>
         </tbody>
       </table>
+
+      {visible < calls.length && (
+        <div style={{ display: "flex", gap: 10, padding: "10px 14px 14px", flexWrap: "wrap" }}>
+          <button onClick={() => setVisible(v => Math.min(calls.length, v + CALLS_PAGE))}
+            style={{ fontSize: 12, fontWeight: 600, color: "#2196F3", background: "rgba(33,150,243,0.12)", border: "1px solid rgba(33,150,243,0.4)", borderRadius: 7, padding: "6px 14px", cursor: "pointer" }}>
+            Yana {Math.min(CALLS_PAGE, calls.length - visible)} ta yuklash
+          </button>
+          <button onClick={() => setVisible(calls.length)}
+            style={{ fontSize: 12, fontWeight: 600, color: "var(--text2)", background: "transparent", border: "1px solid var(--border)", borderRadius: 7, padding: "6px 14px", cursor: "pointer" }}>
+            Barchasini ko'rsatish ({calls.length})
+          </button>
+        </div>
+      )}
     </div>
   );
 }
@@ -271,8 +330,8 @@ export default function CallStatistikasi() {
   const [filters, setFilters]       = useState<CallFilterState>(() => defaultCallFilters());
   const [filterOpen, setFilterOpen] = useState(false);
   const [selectedResp, setSelectedResp] = useState<{ id: number; name: string } | null>(null);
+  const [shownOps, setShownOps] = useState(OPS_INITIAL);
   const pageScrollRef = useRef<HTMLDivElement>(null);
-  const detailRef = useRef<HTMLDivElement>(null);
   const apiFilter = toApiFilter(filters);
   const activeFilters = activeFilterCount(filters);
 
@@ -281,6 +340,7 @@ export default function CallStatistikasi() {
   const statsQ = useQuery({
     queryKey: ["py-call-stats", apiFilter],
     queryFn:  () => getPyCallStats(apiFilter),
+    refetchInterval: REFRESH_MS,
   });
 
   const filterOptionsQ = useQuery({
@@ -292,18 +352,15 @@ export default function CallStatistikasi() {
   const rows: PyResponsibleCallStats[]      = data?.responsibles ?? [];
   const failedCalls = data?.failed_calls ?? 0;
   const ndzCalls = data?.ndz_calls ?? 0;
-  const selectedRow = selectedResp ? rows.find((u, idx) => (u.responsible_id ?? idx) === selectedResp.id) : null;
+  // Expanding an operator must NOT scroll the page: the whole point of the
+  // inline list is that the operators above and below stay in view.
 
+  // Keep an expanded operator reachable when the list collapses back to 12.
   useEffect(() => {
     if (!selectedResp) return;
-    const t = window.setTimeout(() => {
-      const scroller = pageScrollRef.current;
-      const detail = detailRef.current;
-      if (!scroller || !detail) return;
-      scroller.scrollTo({ top: Math.max(0, detail.offsetTop - 16), behavior: "smooth" });
-    }, 80);
-    return () => window.clearTimeout(t);
-  }, [selectedResp?.id]);
+    const i = rows.findIndex((u, idx) => (u.responsible_id ?? idx) === selectedResp.id);
+    if (i >= 0 && i >= shownOps) setShownOps(Math.min(rows.length, i + 1));
+  }, [selectedResp, rows, shownOps]);
 
   const TH  = (extra?: React.CSSProperties): React.CSSProperties => ({ padding: "10px 14px", textAlign: "center", fontSize: 11, fontWeight: 700, color: "var(--text2)", textTransform: "uppercase", letterSpacing: "0.05em", background: "var(--bg2)", borderBottom: "1px solid var(--border)", whiteSpace: "nowrap", ...extra });
   const TD  = (extra?: React.CSSProperties): React.CSSProperties => ({ padding: "11px 14px", verticalAlign: "middle", borderBottom: "1px solid var(--border)", textAlign: "center", ...extra });
@@ -311,10 +368,22 @@ export default function CallStatistikasi() {
   const selStyle = { width: "100%", padding: "8px 10px", fontSize: 12, background: "var(--bg3)", border: "1px solid var(--border)", color: "var(--text)", borderRadius: 8 };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", height: "100%", minHeight: 0, overflow: "hidden", background: "var(--bg2)" }}>
+    /* Fragment, NOT a wrapper div — Topbar and the scroller must be direct flex
+       children of AppLayout's <main>, exactly as LidlarPage does it. An extra
+       wrapper adds a height-resolution step that leaves the scroller unbounded,
+       so the table just got clipped at the viewport with no way to scroll. */
+    <>
       <Topbar title="Call statistikasi" />
 
-      <div ref={pageScrollRef} style={{ flex: 1, minHeight: 0, overflowY: "auto", overscrollBehavior: "contain", padding: "18px 24px 96px", display: "flex", flexDirection: "column", gap: 16 }}>
+      {/* A PLAIN BLOCK scroller — not a flex column.
+          Flex children default to flex-shrink:1, so in a bounded column they
+          get squashed below their content height instead of overflowing, and
+          any card with overflow:hidden then clips its own rows. That is what
+          kept cutting the operator table mid-row. Block layout lets children
+          take their natural height and the container simply scrolls. */}
+      <style>{`.callpage-stack > * + * { margin-top: 16px; }`}</style>
+      <div ref={pageScrollRef} className="callpage-stack"
+        style={{ flex: 1, minHeight: 0, overflowY: "auto", padding: "18px 24px 96px", background: "var(--bg2)" }}>
 
         {/* ── Inline filter panel ── */}
         <div style={{ background: "var(--bg2)", border: "1px solid var(--border)", borderRadius: 10, overflow: filterOpen ? "visible" : "hidden", position: "sticky", top: 0, zIndex: 10 }}>
@@ -466,7 +535,9 @@ export default function CallStatistikasi() {
         </div>
 
         {/* ── Main stats table ── */}
-        <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 14, overflow: "hidden", flex: 1 }}>
+        {/* No flex sizing and NO overflow:hidden — nothing here may clip the
+            table. Corners are rounded on the header/body instead. */}
+        <div style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 14 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "16px 20px", borderBottom: "1px solid var(--border)" }}>
             <div>
               <div style={{ fontSize: 15, fontWeight: 700, color: "var(--text)" }}>Xodimlar bo'yicha hisobot</div>
@@ -488,7 +559,9 @@ export default function CallStatistikasi() {
                     <th style={TH({ textAlign: "left", minWidth: 200 })} rowSpan={2}>OPERATORLAR</th>
                     <th style={TH({ color: "#2196F3", borderLeft: "2px solid rgba(33,150,243,0.2)" })} colSpan={3}>QO'NG'IROQLAR SONI</th>
                     <th style={TH({ color: "#4CAF50", borderLeft: "2px solid rgba(76,175,80,0.2)" })} colSpan={3}>UNIKAL QO'NG'IROQLAR</th>
-                    <th style={TH({ color: "#9C27B0", borderLeft: "2px solid rgba(156,39,176,0.2)" })} colSpan={3}>DAVOMIYLIK</th>
+                    {/* 4 columns: the two directions, then the two distinct
+                        totals the PBX reports (talk vs call length). */}
+                    <th style={TH({ color: "#9C27B0", borderLeft: "2px solid rgba(156,39,176,0.2)" })} colSpan={4}>DAVOMIYLIK</th>
                     <th style={TH({ color: "#FF9800", borderLeft: "2px solid rgba(255,152,0,0.24)" })} colSpan={3}>PROPUSHENNIY</th>
                   </tr>
                   <tr>
@@ -500,14 +573,15 @@ export default function CallStatistikasi() {
                     <th style={TH()}>Umumiy</th>
                     <th style={TH({ borderLeft: "2px solid rgba(156,39,176,0.2)" })}>Kiruvchi</th>
                     <th style={TH()}>Isxodyashie</th>
-                    <th style={TH()}>Jami</th>
+                    <th style={TH()} title="разговоров — sof suhbat vaqti">Suhbat</th>
+                    <th style={TH()} title="длительность звонков — qo'ng'iroq davomiyligi">Davomiylik</th>
                     <th style={TH({ borderLeft: "2px solid rgba(255,152,0,0.24)" })}>Umumiy</th>
                     <th style={TH()}>Qayta chiqilgan</th>
                     <th style={TH()}>Chiqilmagan</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {rows.map((u, idx) => {
+                  {rows.slice(0, shownOps).map((u, idx) => {
                     const uid    = u.responsible_id ?? idx;
                     const isSel  = selectedResp?.id === uid;
                     return (
@@ -530,40 +604,68 @@ export default function CallStatistikasi() {
                           <td style={TD({ fontWeight: 700 })}>{u.unique_total}</td>
                           <td style={TD({ borderLeft: "2px solid rgba(156,39,176,0.10)", fontFamily: "monospace", fontSize: 12 })}>{fmtDur(u.inbound_duration)}</td>
                           <td style={TD({ fontFamily: "monospace", fontSize: 12 })}>{fmtDur(u.outbound_duration)}</td>
+                          {/* Two separate columns — разговоров and длительность
+                              звонков are different measures, not one total. */}
                           <td style={TD({ fontWeight: 700, fontFamily: "monospace", fontSize: 12 })}>{fmtDur(u.total_duration)}</td>
+                          <td style={TD({ fontWeight: 700, fontFamily: "monospace", fontSize: 12, color: "#9C27B0" })}>{fmtDur(u.call_dur_total ?? 0)}</td>
                           <td style={TD({ borderLeft: "2px solid rgba(255,152,0,0.12)", color: "#FF9800", fontWeight: 700 })}>{u.missed_inbound}</td>
                           <td style={TD({ color: "#4CAF50", fontWeight: 700 })}>{u.missed_recalled}</td>
                           <td style={TD({ color: "#F44336", fontWeight: 700 })}>{u.missed_unrecalled}</td>
                         </tr>
+                        {/* Call list opens INLINE, directly under its operator, so the
+                            rows above and below stay on screen while drilling in. */}
+                        {isSel && u.responsible_id != null && (
+                          <tr>
+                            <td colSpan={14} style={{ padding: 0, background: "rgba(33,150,243,0.04)", borderLeft: "2px solid #2196F3", borderRight: "2px solid #2196F3" }}>
+                              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "10px 16px", borderBottom: "1px solid var(--border)" }}>
+                                <span style={{ fontSize: 13, fontWeight: 700, color: "var(--text)" }}>
+                                  {u.full_name} — qo'ng'iroqlar ro'yxati
+                                </span>
+                                <button onClick={(e) => { e.stopPropagation(); setSelectedResp(null); }}
+                                  style={{ border: "1px solid var(--border)", background: "var(--bg2)", color: "var(--text2)", borderRadius: 8, padding: "5px 10px", fontSize: 12, cursor: "pointer" }}>
+                                  Yopish
+                                </button>
+                              </div>
+                              <CallSubTable responsibleId={u.responsible_id} filter={apiFilter} />
+                            </td>
+                          </tr>
+                        )}
                       </Fragment>
                     );
                   })}
                 </tbody>
               </table>
+
+              {/* Same 12-then-8 expansion as the lead board. */}
+              {rows.length > OPS_INITIAL && (
+                <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "12px 16px" }}>
+                  {shownOps < rows.length ? (
+                    <>
+                      <span style={{ fontSize: 12.5, color: "var(--text3)" }}>
+                        Yana <b style={{ color: "var(--text2)" }}>{rows.length - shownOps}</b> ta operator ko'rsatilmagan
+                      </span>
+                      <button onClick={() => setShownOps(v => Math.min(rows.length, v + OPS_STEP))}
+                        style={{ fontSize: 12, fontWeight: 600, color: "#2196F3", background: "rgba(33,150,243,0.12)", border: "1px solid rgba(33,150,243,0.4)", borderRadius: 7, padding: "6px 14px", cursor: "pointer" }}>
+                        Yana {Math.min(OPS_STEP, rows.length - shownOps)} ta ko'rsatish
+                      </button>
+                      <button onClick={() => setShownOps(rows.length)}
+                        style={{ fontSize: 12, fontWeight: 600, color: "var(--text2)", background: "transparent", border: "1px solid var(--border)", borderRadius: 7, padding: "6px 14px", cursor: "pointer" }}>
+                        Barchasini ko'rsatish ({rows.length})
+                      </button>
+                    </>
+                  ) : (
+                    <button onClick={() => setShownOps(OPS_INITIAL)}
+                      style={{ fontSize: 12, fontWeight: 600, color: "var(--text2)", background: "transparent", border: "1px solid var(--border)", borderRadius: 7, padding: "6px 14px", cursor: "pointer" }}>
+                      Kamroq ko'rsatish (faqat {OPS_INITIAL} ta)
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>
 
-        {selectedRow?.responsible_id != null && (
-          <div ref={detailRef} style={{ background: "var(--bg)", border: "1px solid var(--border)", borderRadius: 14, overflow: "hidden", scrollMarginTop: 16 }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, padding: "14px 18px", borderBottom: "1px solid var(--border)", background: "rgba(33,150,243,0.05)" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0 }}>
-                <div style={{ minWidth: 0 }}>
-                  <div style={{ fontSize: 13.5, fontWeight: 700, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
-                    {selectedRow.full_name} — qo'ng'iroqlar ro'yxati
-                  </div>
-                </div>
-              </div>
-              <button onClick={() => setSelectedResp(null)} style={{ border: "1px solid var(--border)", background: "var(--bg2)", color: "var(--text2)", borderRadius: 8, padding: "6px 10px", fontSize: 12, cursor: "pointer" }}>
-                Yopish
-              </button>
-            </div>
-            <CallSubTable responsibleId={selectedRow.responsible_id} filter={apiFilter} />
-          </div>
-        )}
-
-
       </div>
-    </div>
+    </>
   );
 }
