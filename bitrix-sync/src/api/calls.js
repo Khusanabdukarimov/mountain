@@ -129,7 +129,16 @@ router.get('/call-stats-full', async (req, res) => {
        ORDER BY c.start_stamp DESC`,
       [from, to, to ? addDaysISO(to, 1) : null, phone, stage],
     );
-    res.json(computeCallStatsFull(rows, from || '', to || '', filters));
+    // The operator roster: everyone holding a PBX extension. Passed in so the
+    // table keeps a zero row for an operator who made no calls in this period
+    // (a Closer on a quiet day) instead of dropping them entirely.
+    const { rows: roster } = await pool.query(
+      `SELECT (ext)::int AS ext, name
+         FROM pbx_users
+        WHERE ext ~ '^[0-9]+$' AND COALESCE(enabled, TRUE)
+        ORDER BY ext`,
+    );
+    res.json(computeCallStatsFull(rows, from || '', to || '', filters, roster));
   } catch (err) {
     fail(res, 'call-stats-full')(err);
   }

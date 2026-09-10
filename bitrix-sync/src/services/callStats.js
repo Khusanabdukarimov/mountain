@@ -39,7 +39,7 @@ const ms = (v) => {
  *   durFrom / durTo   seconds, on total call duration;
  * }
  */
-function computeCallStatsFull(rows, dateFrom, dateTo, filters = {}) {
+function computeCallStatsFull(rows, dateFrom, dateTo, filters = {}, roster = []) {
   const opId = filters.opId ?? null;
   const kind = filters.kind ?? null;
   const status = filters.status ?? null;
@@ -153,8 +153,24 @@ function computeCallStatsFull(rows, dateFrom, dateTo, filters = {}) {
     else nePerezvonili += 1;
   }
 
+  // Every operator who owns an extension must stay on the table even with no
+  // calls in the selected period — otherwise a Closer (who rarely dials) simply
+  // vanishes on a quiet day, and picking them in the filter yields a blank
+  // table. The old Python implementation padded these zero rows; that was lost
+  // when call stats moved to OnlinePBX, so re-instate it here.
+  // Only extensions are padded: someone with no phone (e.g. an assistant) is
+  // deliberately NOT invented into the call report.
+  for (const m of roster) {
+    if (m.ext == null) continue;
+    if (opId != null && Number(m.ext) !== Number(opId)) continue;
+    const key = String(m.ext);
+    if (ops.has(key)) continue;
+    const b = getOp({ responsible_id: m.ext, full_name: m.name, photo_url: m.photo_url });
+    b._padded = true;
+  }
+
   const responsibles = [...ops.values()]
-    .filter((b) => b.inbound_calls + b.outbound_calls > 0)
+    .filter((b) => b.inbound_calls + b.outbound_calls > 0 || b._padded)
     .map((b) => {
       for (const m of b._missed) {
         if (m.num && m.at != null && contactedWithin(m.num, m.at)) b.missed_recalled += 1;

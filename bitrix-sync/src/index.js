@@ -182,6 +182,17 @@ Promise.all([
       console.error('[reconcile-deals] failed to schedule:', e.message);
     }
 
+    // Daily user sync (01:30 Tashkent) — mirrors the Bitrix user directory into
+    // `responsibles`. Every filter dropdown reads that table, so without this a
+    // new hire is invisible in every section until someone re-runs initialSync
+    // by hand. Also runs once ~60s after startup.
+    try {
+      const { scheduleDailyUserSync } = require('./sync/syncResponsibles');
+      scheduleDailyUserSync();
+    } catch (e) {
+      console.error('[sync-responsibles] failed to schedule:', e.message);
+    }
+
     // Check Meta access token expiry on startup
     (async () => {
       try {
