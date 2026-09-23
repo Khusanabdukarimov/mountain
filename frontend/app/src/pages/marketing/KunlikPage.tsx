@@ -376,6 +376,10 @@ export default function KunlikPage() {
     { value: 18, label: "Samandar Samadov" },
     { value: 14, label: "Bekzod Ergashev" },
     { value: 22, label: "Shahzod Yormamatov" },
+    { value: 20, label: "Shaxzod Murtazoyev" },
+    // Bitrix user #74 — 248 ta lid oladi, lekin ismi REST orqali o'qilmadi
+    // (webhook tokenida `user` scope yo'q). Ism aniqlangach shu yerda to'g'rilanadi.
+    { value: 74, label: "Xodim #74" },
   ];
   const toggleTargetolog = (v: string) =>
     setTargetologs(prev => prev.includes(v) ? prev.filter(x => x !== v) : [...prev, v]);
