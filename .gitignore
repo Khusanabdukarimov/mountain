@@ -43,3 +43,6 @@ backend/.env
 *.csv
 *.xlsx
 !bitrix-sync/scripts/*.csv
+
+# Google service-account key for the Sheets lead intake — server only
+bitrix-sync/google-credentials.json

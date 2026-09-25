@@ -182,6 +182,16 @@ Promise.all([
       console.error('[reconcile-deals] failed to schedule:', e.message);
     }
 
+    // Google Sheets → Bitrix lead yaratish (har daqiqada). "Leads" varag'iga
+    // tushgan yangi qatorlar lead qilib yaratiladi va Bitrix ID varaqqa
+    // qaytarib yoziladi. SHEETS_LEADS_ID qo'yilmasa — o'chiq.
+    try {
+      const { scheduleSheetLeadsPoll } = require('./sync/sheetLeads');
+      scheduleSheetLeadsPoll();
+    } catch (e) {
+      console.error('[sheet-leads] failed to schedule:', e.message);
+    }
+
     // Daily user sync (01:30 Tashkent) — mirrors the Bitrix user directory into
     // `responsibles`. Every filter dropdown reads that table, so without this a
     // new hire is invisible in every section until someone re-runs initialSync
