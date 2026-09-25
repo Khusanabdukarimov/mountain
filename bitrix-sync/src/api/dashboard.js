@@ -751,8 +751,7 @@ router.get('/deals-conversion', async (req, res) => {
        -- which is what the Bitrix kanban column shows.
        kel AS (
          SELECT d.responsible_id,
-                COUNT(*)::int AS entered,
-                COUNT(*) FILTER (WHERE s.bitrix_id = 'UC_W35V62')::int AS still_there
+                COUNT(*)::int AS entered
          FROM deals d
          JOIN stages s ON s.id = d.stage_id
          LEFT JOIN LATERAL (SELECT phone FROM deal_phones WHERE deal_id = d.id LIMIT 1) ph ON true
@@ -760,6 +759,20 @@ router.get('/deals-conversion', async (req, res) => {
            AND d.uf_kelishuv_date IS NOT NULL
            AND ($1::date IS NULL OR (d.uf_kelishuv_date AT TIME ZONE 'Asia/Tashkent')::date >= $1::date)
            AND ($2::date IS NULL OR (d.uf_kelishuv_date AT TIME ZONE 'Asia/Tashkent')::date <= $2::date)
+           ${extra.join(' ')}
+         GROUP BY d.responsible_id
+       ),
+       -- Deals sitting in the stage RIGHT NOW. Deliberately NOT date-filtered:
+       -- this is the live kanban count (38 on the Bitrix board today), and most
+       -- of those deals entered the stage months ago, so scoping it to the
+       -- selected period would collapse it to near-zero and contradict Bitrix.
+       kel_now AS (
+         SELECT d.responsible_id, COUNT(*)::int AS still_there
+         FROM deals d
+         JOIN stages s ON s.id = d.stage_id
+         LEFT JOIN LATERAL (SELECT phone FROM deal_phones WHERE deal_id = d.id LIMIT 1) ph ON true
+         WHERE d.category_id = 0
+           AND s.bitrix_id = 'UC_W35V62'
            ${extra.join(' ')}
          GROUP BY d.responsible_id
        )
@@ -770,14 +783,15 @@ router.get('/deals-conversion', async (req, res) => {
          COUNT(fd.id)::int AS total,
          COUNT(fd.id) FILTER (WHERE NOT fd.is_won = true AND NOT fd.is_final)::int AS jarayonda,
          COALESCE(MAX(kel.entered), 0)::int     AS kelishuv_boldi,
-         COALESCE(MAX(kel.still_there), 0)::int AS kelishuv_hozir,
+         COALESCE(MAX(kel_now.still_there), 0)::int AS kelishuv_hozir,
          COUNT(fd.id) FILTER (WHERE fd.is_won = true)::int AS sotuv_boldi,
          COUNT(fd.id) FILTER (WHERE fd.is_final AND NOT fd.is_won)::int AS bekor_boldi,
          COALESCE(MAX(paid.amount), 0)::numeric AS jami_sotuv
        FROM responsibles r
        JOIN fd ON fd.responsible_id = r.id
        LEFT JOIN paid ON paid.responsible_id = r.id
-       LEFT JOIN kel  ON kel.responsible_id  = r.id
+       LEFT JOIN kel     ON kel.responsible_id     = r.id
+       LEFT JOIN kel_now ON kel_now.responsible_id = r.id
        GROUP BY r.id, r.name, r.last_name, r.work_position
        HAVING COUNT(fd.id) > 0
        ORDER BY total DESC`,
