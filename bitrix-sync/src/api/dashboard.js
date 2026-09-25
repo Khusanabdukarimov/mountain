@@ -65,6 +65,7 @@ const SOURCE_NAMES = {
   'UC_BOJPCA': 'Sovuq qo\'ng\'iroq',
   'UC_0QF8D1': 'Veb sayt',
   'UC_CKSPAM': 'Organik tashrif',
+  'READY_UZ': 'Ready.uz',   // Google Sheets "Leads" varag'idan kelgan lidlar
 };
 
 /**
