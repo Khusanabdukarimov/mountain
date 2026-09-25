@@ -127,6 +127,11 @@ export type DealsConversionRow = {
   work_position?: string | null;
   total: number;
   jarayonda: number;
+  /** Deals that ENTERED the "Kelishuv bo'ldi" stage in the period, counted by
+   *  uf_kelishuv_date — includes deals that have since moved on to Sotuv bo'ldi. */
+  kelishuv_boldi: number;
+  /** Of those, the ones still sitting in the stage now — the Bitrix kanban count. */
+  kelishuv_hozir: number;
   sotuv_boldi: number;
   bekor_boldi: number;
   jami_sotuv: number;

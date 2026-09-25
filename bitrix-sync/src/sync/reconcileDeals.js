@@ -17,6 +17,8 @@ const DEAL_SELECT = [
   'UF_CRM_69EBC105EAA93', 'UF_CRM_1779450406', 'UF_CRM_1779450159', 'CONTACT_ID',
   'UF_CRM_69FEFD2D71544', 'UF_CRM_10_1780604989', 'UF_CRM_1780643524', 'UF_CRM_1780643502',
   'UF_CRM_69D8F7169A174', 'LEAD_ID', 'CATEGORY_ID',
+  // "Kelishuv bo'lidi (sotuv) tushgan vaqti" — when the deal entered that stage
+  'UF_CRM_1779450350',
 ];
 
 let running = false;

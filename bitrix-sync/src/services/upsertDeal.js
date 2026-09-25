@@ -71,8 +71,8 @@ async function upsertDeal(r, client) {
        source_id, utm_source, date_create, date_modify, closedate,
        uf_sale_date, uf_bp_sale_date, uf_payment_date,
        uf_paid_sum, uf_remaining_sum,
-       uf_cancel_reason, contact_id, begindate, uf_amo_date, uf_service, uf_tolandi_sum, lead_id, category_id, synced_at
-     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,NOW())
+       uf_cancel_reason, contact_id, begindate, uf_amo_date, uf_service, uf_tolandi_sum, lead_id, category_id, uf_kelishuv_date, synced_at
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,NOW())
      ON CONFLICT (id) DO UPDATE SET
        responsible_id   = EXCLUDED.responsible_id,
        stage_id         = EXCLUDED.stage_id,
@@ -95,6 +95,8 @@ async function upsertDeal(r, client) {
        uf_tolandi_sum   = EXCLUDED.uf_tolandi_sum,
        lead_id          = COALESCE(EXCLUDED.lead_id, deals.lead_id),
        category_id      = EXCLUDED.category_id,
+       -- Never let a webhook that omits the UF block erase the stage-entry time.
+       uf_kelishuv_date = COALESCE(EXCLUDED.uf_kelishuv_date, deals.uf_kelishuv_date),
        synced_at        = NOW()
      RETURNING id`,
     [
@@ -121,6 +123,8 @@ async function upsertDeal(r, client) {
       tolandiSum,
       leadId,
       categoryId,
+      // UF_CRM_1779450350 — "Kelishuv bo'lidi (sotuv) tushgan vaqti"
+      parseDate(r.UF_CRM_1779450350),
     ]
   );
 

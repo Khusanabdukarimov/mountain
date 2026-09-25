@@ -89,12 +89,18 @@ Promise.all([
     ALTER TABLE deals ADD COLUMN IF NOT EXISTS begindate        TIMESTAMPTZ;
     ALTER TABLE deals ADD COLUMN IF NOT EXISTS uf_service       TEXT;
     ALTER TABLE deals ADD COLUMN IF NOT EXISTS uf_tolandi_sum  NUMERIC(14,2);
+    -- UF_CRM_1779450350 — "Kelishuv bo'lidi (sotuv) tushgan vaqti": the moment a
+    -- deal landed in the Kelishuv bo'ldi stage. Needed to count how many deals
+    -- ENTERED that stage in a period, which the current stage_id alone cannot
+    -- answer once a deal has moved on to Sotuv bo'ldi.
+    ALTER TABLE deals ADD COLUMN IF NOT EXISTS uf_kelishuv_date TIMESTAMPTZ;
     CREATE INDEX IF NOT EXISTS deals_date_modify_idx      ON deals(date_modify);
     CREATE INDEX IF NOT EXISTS deals_uf_sale_date_idx     ON deals(uf_sale_date);
     CREATE INDEX IF NOT EXISTS deals_uf_bp_sale_date_idx  ON deals(uf_bp_sale_date);
     CREATE INDEX IF NOT EXISTS deals_uf_payment_date_idx  ON deals(uf_payment_date);
     CREATE INDEX IF NOT EXISTS deals_begindate_idx        ON deals(begindate);
     CREATE INDEX IF NOT EXISTS deals_uf_service_idx       ON deals(uf_service);
+    CREATE INDEX IF NOT EXISTS deals_uf_kelishuv_date_idx  ON deals(uf_kelishuv_date);
   `).catch(err => console.error('[startup] leads/deals migration failed:', err.message)),
   // Normalized-phone columns (last 9 digits, GENERATED once at write time) +
   // b-tree indexes. Phone-matching joins across the app use these instead of

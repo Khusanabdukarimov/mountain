@@ -473,6 +473,7 @@ export default function SdelkalarPage() {
   const convMax = useMemo(() => ({
     total: Math.max(1, ...convRows.map(r => r.total)),
     jarayonda: Math.max(1, ...convRows.map(r => r.jarayonda)),
+    kelishuv_boldi: Math.max(1, ...convRows.map(r => r.kelishuv_boldi)),
     sotuv_boldi: Math.max(1, ...convRows.map(r => r.sotuv_boldi)),
     bekor_boldi: Math.max(1, ...convRows.map(r => r.bekor_boldi)),
     jami_sotuv: Math.max(1, ...convRows.map(r => r.jami_sotuv)),
@@ -481,11 +482,13 @@ export default function SdelkalarPage() {
     (acc, r) => ({
       total: acc.total + r.total,
       jarayonda: acc.jarayonda + r.jarayonda,
+      kelishuv_boldi: acc.kelishuv_boldi + r.kelishuv_boldi,
+      kelishuv_hozir: acc.kelishuv_hozir + r.kelishuv_hozir,
       sotuv_boldi: acc.sotuv_boldi + r.sotuv_boldi,
       bekor_boldi: acc.bekor_boldi + r.bekor_boldi,
       jami_sotuv: acc.jami_sotuv + Number(r.jami_sotuv),
     }),
-    { total: 0, jarayonda: 0, sotuv_boldi: 0, bekor_boldi: 0, jami_sotuv: 0 }
+    { total: 0, jarayonda: 0, kelishuv_boldi: 0, kelishuv_hozir: 0, sotuv_boldi: 0, bekor_boldi: 0, jami_sotuv: 0 }
   ), [convRows]);
 
   // ── Source stats derived data ────────────────────────────────────
@@ -727,6 +730,7 @@ export default function SdelkalarPage() {
                   <col />
                   <col />
                   <col />
+                  <col />
                   <col style={{ width: 84 }} />
                 </colgroup>
                 <thead>
@@ -736,6 +740,7 @@ export default function SdelkalarPage() {
                     <th style={THc("#9E9E9E", 110)}>Rol</th>
                     <th style={THc("#2196F3")}>Jami Sdelka</th>
                     <th style={THc("#FF9800")}>Jarayonda</th>
+                    <th style={THc("#9C27B0")}>Kelishuv bo'ldi</th>
                     <th style={THc("#4CAF50")}>Sotuv bo'ldi</th>
                     <th style={THc("#F44336")}>Bekor bo'ldi</th>
                     <th style={THc("#00BCD4")}>Jami Sotuv ($)</th>
@@ -774,6 +779,13 @@ export default function SdelkalarPage() {
                         <td style={TDa}>
                           <span style={{ fontSize: 15, fontWeight: 600, color: "var(--text)" }}>{fmtNum(r.jarayonda)}</span>
                           <MiniBar value={r.jarayonda} max={convMax.jarayonda} color="#FF9800" />
+                        </td>
+                        <td style={TDa}>
+                          {/* Entered the stage in this period; the muted number is
+                              how many of them are still sitting there right now. */}
+                          <span style={{ fontSize: 15, fontWeight: 600, color: "var(--text)" }}>{fmtNum(r.kelishuv_boldi)}</span>
+                          <span style={{ fontSize: 11, color: "var(--text3)", marginLeft: 5 }}>· {fmtNum(r.kelishuv_hozir)} hozir</span>
+                          <MiniBar value={r.kelishuv_boldi} max={convMax.kelishuv_boldi} color="#9C27B0" />
                         </td>
                         <td style={TDa}>
                           <span style={{ fontSize: 15, fontWeight: 600, color: "var(--text)" }}>{fmtNum(r.sotuv_boldi)}</span>
@@ -822,6 +834,11 @@ export default function SdelkalarPage() {
                     <td style={TDa}>
                       <span style={{ fontSize: 16, fontWeight: 700, color: "var(--text)" }}>{fmtNum(convTotals.jarayonda)}</span>
                       <MiniBar value={1} max={1} color="#FF9800" />
+                    </td>
+                    <td style={TDa}>
+                      <span style={{ fontSize: 16, fontWeight: 700, color: "var(--text)" }}>{fmtNum(convTotals.kelishuv_boldi)}</span>
+                      <span style={{ fontSize: 11, color: "var(--text3)", marginLeft: 5 }}>· {fmtNum(convTotals.kelishuv_hozir)} hozir</span>
+                      <MiniBar value={1} max={1} color="#9C27B0" />
                     </td>
                     <td style={TDa}>
                       <span style={{ fontSize: 16, fontWeight: 700, color: "var(--text)" }}>{fmtNum(convTotals.sotuv_boldi)}</span>

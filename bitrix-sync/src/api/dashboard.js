@@ -743,6 +743,25 @@ router.get('/deals-conversion', async (req, res) => {
              ${extraPay.join(' ')}
          ) sub
          GROUP BY responsible_id
+       ),
+       -- Deals that ENTERED the "Kelishuv bo'ldi" stage inside the period.
+       -- Keyed on uf_kelishuv_date, NOT on the current stage_id: a deal that has
+       -- since moved on to Sotuv bo'ldi still passed through Kelishuv and must
+       -- be counted. still_there is the subset sitting in the stage right now,
+       -- which is what the Bitrix kanban column shows.
+       kel AS (
+         SELECT d.responsible_id,
+                COUNT(*)::int AS entered,
+                COUNT(*) FILTER (WHERE s.bitrix_id = 'UC_W35V62')::int AS still_there
+         FROM deals d
+         JOIN stages s ON s.id = d.stage_id
+         LEFT JOIN LATERAL (SELECT phone FROM deal_phones WHERE deal_id = d.id LIMIT 1) ph ON true
+         WHERE d.category_id = 0
+           AND d.uf_kelishuv_date IS NOT NULL
+           AND ($1::date IS NULL OR (d.uf_kelishuv_date AT TIME ZONE 'Asia/Tashkent')::date >= $1::date)
+           AND ($2::date IS NULL OR (d.uf_kelishuv_date AT TIME ZONE 'Asia/Tashkent')::date <= $2::date)
+           ${extra.join(' ')}
+         GROUP BY d.responsible_id
        )
        SELECT
          r.id AS responsible_id,
@@ -750,12 +769,15 @@ router.get('/deals-conversion', async (req, res) => {
          r.work_position,
          COUNT(fd.id)::int AS total,
          COUNT(fd.id) FILTER (WHERE NOT fd.is_won = true AND NOT fd.is_final)::int AS jarayonda,
+         COALESCE(MAX(kel.entered), 0)::int     AS kelishuv_boldi,
+         COALESCE(MAX(kel.still_there), 0)::int AS kelishuv_hozir,
          COUNT(fd.id) FILTER (WHERE fd.is_won = true)::int AS sotuv_boldi,
          COUNT(fd.id) FILTER (WHERE fd.is_final AND NOT fd.is_won)::int AS bekor_boldi,
          COALESCE(MAX(paid.amount), 0)::numeric AS jami_sotuv
        FROM responsibles r
        JOIN fd ON fd.responsible_id = r.id
        LEFT JOIN paid ON paid.responsible_id = r.id
+       LEFT JOIN kel  ON kel.responsible_id  = r.id
        GROUP BY r.id, r.name, r.last_name, r.work_position
        HAVING COUNT(fd.id) > 0
        ORDER BY total DESC`,
