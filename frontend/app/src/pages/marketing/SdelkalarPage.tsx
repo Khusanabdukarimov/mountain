@@ -202,11 +202,15 @@ function SdelkaMultiSelect({ label, options, values, onChange, loading }: {
 const BX_BASE = "https://mountain.bitrix24.kz/crm/deal/details";
 
 function OperatorDealsDropdown({
-  responsibleId, from, to, mode,
-}: { responsibleId: string; from?: string; to?: string; mode: string }) {
+  responsibleId, from, to, mode, source, stageId,
+}: { responsibleId: string; from?: string; to?: string; mode: string; source?: string; stageId?: string }) {
+  // Manba va bosqich sahifaning yuqorisidagi filtrdan keladi — aks holda
+  // "Target" tanlangan bo'lsa ham ichkarida Instagram/LTV deallari chiqardi.
   const q = useQuery({
-    queryKey: ["op-deals", responsibleId, from, to, mode],
-    queryFn: () => getDealsList({ from, to, responsible_id: responsibleId, limit: 200, mode }),
+    queryKey: ["op-deals", responsibleId, from, to, mode, source, stageId],
+    queryFn: () => getDealsList({
+      from, to, responsible_id: responsibleId, source, stage_id: stageId, limit: 200, mode,
+    }),
     staleTime: 5 * 60_000,
   });
 
@@ -795,6 +799,8 @@ export default function SdelkalarPage() {
                             from={apiFrom}
                             to={apiTo}
                             mode={mode}
+                            source={filter.sources.join(',') || undefined}
+                            stageId={filter.stage_ids.join(',') || undefined}
                           />
                         </tr>
                       )}
@@ -905,7 +911,11 @@ export default function SdelkalarPage() {
                     {rExp && (
                       <tr key={`${rKey}-expand`} style={{ background: "var(--bg2)" }}>
                         <DealsInlinePanel
-                          filter={{ from: apiFrom, to: apiTo, responsible_id: rKey, mode }}
+                          filter={{
+                            from: apiFrom, to: apiTo, responsible_id: rKey, mode,
+                            source: filter.sources.join(',') || undefined,
+                            stage_id: filter.stage_ids.join(',') || undefined,
+                          }}
                           colSpan={2 + DEAL_STAGE_COLS.length}
                         />
                       </tr>
@@ -1068,7 +1078,11 @@ export default function SdelkalarPage() {
                     {sExp && (
                       <tr key={`${sKey}-expand`} style={{ background: "var(--bg2)" }}>
                         <DealsInlinePanel
-                          filter={{ from: apiFrom, to: apiTo, source: sKey, mode }}
+                          filter={{
+                            from: apiFrom, to: apiTo, source: sKey, mode,
+                            responsible_id: filter.responsible_ids.join(',') || undefined,
+                            stage_id: filter.stage_ids.join(',') || undefined,
+                          }}
                           colSpan={6}
                         />
                       </tr>

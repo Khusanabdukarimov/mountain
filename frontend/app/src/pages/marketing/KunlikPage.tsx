@@ -376,6 +376,8 @@ export default function KunlikPage() {
     { value: 18, label: "Samandar Samadov" },
     { value: 14, label: "Bekzod Ergashev" },
     { value: 22, label: "Shahzod Yormamatov" },
+    { value: 20, label: "Shaxzod Murtazoyev" },
+    { value: 74, label: "Azizjon Normoatov" },
   ];
   const toggleTargetolog = (v: string) =>
     setTargetologs(prev => prev.includes(v) ? prev.filter(x => x !== v) : [...prev, v]);

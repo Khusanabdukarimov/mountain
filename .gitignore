@@ -44,5 +44,6 @@ backend/.env
 *.xlsx
 !bitrix-sync/scripts/*.csv
 
-# Google service-account key for the Sheets lead intake — server only
+# ── Google service-account kalitlari (hech qachon commit qilinmasin) ──────────
+credentials.json
 bitrix-sync/google-credentials.json
