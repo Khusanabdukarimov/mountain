@@ -73,6 +73,18 @@ app.get('/health', async (req, res) => {
 // Run all migrations before accepting connections
 Promise.all([
   pool.query(`
+    ALTER TABLE responsibles ADD COLUMN IF NOT EXISTS taqsimot_enabled BOOLEAN;
+    UPDATE responsibles
+      SET taqsimot_enabled = (
+        COALESCE(taqsimot_pct, 0) > 0
+        OR LOWER(COALESCE(work_position, '')) LIKE '%hunter%'
+        OR LOWER(COALESCE(work_position, '')) LIKE '%closer%'
+      )
+      WHERE taqsimot_enabled IS NULL;
+    ALTER TABLE responsibles ALTER COLUMN taqsimot_enabled SET DEFAULT FALSE;
+    ALTER TABLE responsibles ALTER COLUMN taqsimot_enabled SET NOT NULL;
+  `).catch(err => console.error('[startup] taqsimot membership migration failed:', err.message)),
+  pool.query(`
     ALTER TABLE leads ADD COLUMN IF NOT EXISTS uf_amo_date TIMESTAMPTZ;
     CREATE INDEX IF NOT EXISTS leads_uf_amo_date_idx ON leads(uf_amo_date);
     -- Sifatsiz / bekor reason (decoded label, written by services/upsertLead.js).

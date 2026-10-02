@@ -24,7 +24,7 @@ const CUSTOM_COLORS = ["#6366f1", "#0891b2", "#059669", "#d97706", "#dc2626", "#
 
 type MetricKey =
   | "budget" | "leads" | "qual_leads" | "meetings_set" | "meetings" | "meeting_conversion"
-  | "deals"  | "deals_sum" | "sales_count" | "sales_sum" | "cancelled"
+  | "deals"  | "deals_sum" | "sales_count" | "sales_sum" | "average_check" | "cancelled"
   | "sifatsiz"
   | "tolangan"
   | "roas" | "qual_lead_cost" | "qual_conversion" | "customer_cost";
@@ -49,6 +49,7 @@ const METRICS: MetricDef[] = [
   { key: "deals_sum",      label: "Kelishuvlar summasi",  format: "money" },
   { key: "sales_count",    label: "Sotuvlar soni",        format: "num"   },
   { key: "sales_sum",      label: "Sotuvlar summasi",     format: "money" },
+  { key: "average_check",  label: "O'rtacha check",        format: "money", computed: true },
   { key: "cancelled",      label: "Bekor bo'ldi",         format: "num"   },
   { key: "sifatsiz",       label: "Sifatsiz",             format: "num"   },
   { key: "roas",           label: "ROAS",                 format: "pct",  computed: true },
@@ -203,6 +204,10 @@ export default function KunlikPage() {
       case "deals_sum":   return field("deals_sum",   b.deals_sum);
       case "sales_count": return field("sales_count", b.sales_count);
       case "sales_sum":   return field("sales_sum",   b.sales_sum);
+      case "average_check": {
+        const s = field("sales_sum", b.sales_sum), c = field("sales_count", b.sales_count);
+        return c > 0 ? s / c : 0;
+      }
       case "cancelled":   return field("cancelled",   b.cancelled);
       case "sifatsiz":    return field("sifatsiz",    b.sifatsiz);
       case "roas": {
@@ -255,6 +260,10 @@ export default function KunlikPage() {
         const bg = sumField("budget"), sc = sumField("sales_count");
         return sc > 0 ? bg / sc : 0;
       }
+      case "average_check": {
+        const s = sumField("sales_sum"), c = sumField("sales_count");
+        return c > 0 ? s / c : 0;
+      }
       default:
         return Array.from({length: days}, (_, i) => cellValue(src as Section, metric, i)).reduce((a,v)=>a+v,0);
     }
@@ -295,6 +304,10 @@ export default function KunlikPage() {
   // summing raw autoData would silently drop everything entered manually.
   function jamiCellValue(metric: MetricDef, i: number): number {
     const sectionKeys = allSections.filter(s => s.key !== "jami").map(s => s.key);
+    if (metric.key === "sales_sum") {
+      const allSourceDaily = qCrm.data?.data?.jami?.sales_sum;
+      if (allSourceDaily) return allSourceDaily[i] ?? 0;
+    }
     const sumField = (key: MetricKey): number =>
       sectionKeys.reduce(
         (sum, src) => sum + cellValue(src, { key, label: "", format: "num" } as MetricDef, i),
@@ -322,6 +335,10 @@ export default function KunlikPage() {
         const bg = sumField("budget"), sc = sumField("sales_count");
         return sc > 0 ? bg / sc : 0;
       }
+      case "average_check": {
+        const s = sumField("sales_sum"), c = sumField("sales_count");
+        return c > 0 ? s / c : 0;
+      }
       default:
         return sumField(metric.key);
     }
@@ -329,6 +346,7 @@ export default function KunlikPage() {
 
   function jamiFaktTotal(metric: MetricDef): number {
     const js = qJamiStats.data;
+    if (metric.key === "sales_sum") return js?.sales_sum ?? 0;
     // To'langan has no daily basis — keep the overall DB total.
     if (metric.key === "tolangan") return js ? js.total_paid : 0;
     // Everything else: FAKT = sum of the Jami daily cells, so the total always
@@ -357,6 +375,10 @@ export default function KunlikPage() {
       case "customer_cost": {
         const bg = sumDays("budget"), sc = sumDays("sales_count");
         return sc > 0 ? bg / sc : 0;
+      }
+      case "average_check": {
+        const s = sumDays("sales_sum"), c = sumDays("sales_count");
+        return c > 0 ? s / c : 0;
       }
       default:
         return sumDays(metric.key);
@@ -838,6 +860,21 @@ function SectionRows({
   onHideMetric?: (key: MetricKey) => void;
 }) {
   const totalCols = days + 4; // name + reja + fakt + var%
+  const meetingsSetTotal = faktTotal({ key: "meetings_set", format: "num" } as MetricDef);
+  const meetingsTotal = faktTotal({ key: "meetings", format: "num" } as MetricDef);
+  const salesTotal = faktTotal({ key: "sales_count", format: "num" } as MetricDef);
+  const conversionFor = (metric: MetricDef): number | null => {
+    // The Var% badge is used here as a funnel-conversion indicator for these
+    // rows, rather than plan attainment.
+    if (metric.key === "qual_leads") return 30;
+    if (metric.key === "meetings") {
+      return meetingsSetTotal > 0 ? (meetingsTotal / meetingsSetTotal) * 100 : null;
+    }
+    if (metric.key === "sales_count") {
+      return meetingsTotal > 0 ? (salesTotal / meetingsTotal) * 100 : null;
+    }
+    return null;
+  };
   return (
     <>
       {/* Section header */}
@@ -867,6 +904,7 @@ function SectionRows({
           todayDay={todayDay}
           planValue={plans?.[metric.key]}
           faktValue={faktTotal(metric)}
+          conversionValue={conversionFor(metric)}
           overrides={overrides?.[metric.key]}
           cellValue={cellValue}
           onPlanSave={(val) => onPlanSave(metric.key, val)}
@@ -880,7 +918,7 @@ function SectionRows({
 
 function MetricRow({
   metric, days, isCurrent, todayDay,
-  planValue, faktValue, overrides, cellValue,
+  planValue, faktValue, conversionValue, overrides, cellValue,
   onPlanSave, onCellSave, onHide,
 }: {
   metric:      MetricDef;
@@ -889,6 +927,7 @@ function MetricRow({
   todayDay:    number;
   planValue:   number | undefined;
   faktValue:   number;
+  conversionValue: number | null;
   overrides:   Record<number, number> | undefined;
   cellValue:   (m: MetricDef, i: number) => number;
   onPlanSave:  (val: number) => Promise<void>;
@@ -903,7 +942,7 @@ function MetricRow({
   const dayRef         = useRef<HTMLInputElement>(null);
   const planCommitting = useRef(false);
 
-  const vp = varPct(faktValue, planValue);
+  const vp = conversionValue ?? varPct(faktValue, planValue);
   const vpBg = vp == null ? "transparent"
     : vp >= 90  ? "rgba(22,163,74,0.18)"
     : vp >= 50  ? "rgba(217,119,6,0.18)"
@@ -1007,7 +1046,7 @@ function MetricRow({
         {vp != null ? (
           <span className="text-[11.5px] font-bold px-2.5 py-0.5 rounded"
             style={{ color: vpColor, background: vpBg }}>
-            {vp}%
+            {fmtPct(vp, 2)}
           </span>
         ) : <span className="text-text3 text-[11px]">—</span>}
       </td>

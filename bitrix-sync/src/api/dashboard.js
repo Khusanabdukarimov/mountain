@@ -1203,13 +1203,13 @@ router.get('/lead-filter-options', async (req, res) => {
 
 /**
  * GET /api/dashboard/taqsimot
- * Returns all active responsibles with their taqsimot_pct values.
+ * Returns active responsibles and whether they are included in the allocation table.
  */
 router.get('/taqsimot', async (_req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT r.id, TRIM(COALESCE(r.name,'') || ' ' || COALESCE(r.last_name,'')) AS full_name,
-              r.email, r.work_position, r.taqsimot_pct
+              r.email, r.work_position, r.taqsimot_pct, r.taqsimot_enabled
        FROM responsibles r
        WHERE r.active = TRUE
        ORDER BY r.name`
@@ -1217,6 +1217,31 @@ router.get('/taqsimot', async (_req, res) => {
     res.json({ responsibles: rows });
   } catch (err) {
     console.error('[dashboard/taqsimot GET]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/**
+ * POST /api/dashboard/taqsimot/:id/add
+ * Adds an active responsible to the allocation table with the chosen percentage.
+ */
+router.post('/taqsimot/:id/add', async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const pct = parseFloat(req.body?.taqsimot_pct ?? 0);
+  if (isNaN(id) || !Number.isFinite(pct) || pct < 0 || pct > 100) {
+    return res.status(400).json({ error: 'Invalid responsible id or taqsimot_pct (0–100)' });
+  }
+  try {
+    const { rows } = await pool.query(
+      `UPDATE responsibles SET taqsimot_enabled = TRUE, taqsimot_pct = $2
+       WHERE id = $1 AND active = TRUE
+       RETURNING id, taqsimot_pct, taqsimot_enabled`,
+      [id, pct]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Active responsible not found' });
+    res.json({ ok: true, ...rows[0] });
+  } catch (err) {
+    console.error('[dashboard/taqsimot add]', err.message);
     res.status(500).json({ error: err.message });
   }
 });

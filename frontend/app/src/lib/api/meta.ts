@@ -59,6 +59,7 @@ export type KunlikResponse = {
     target: KunlikRow;
     instagram: KunlikRow;
     unmatched: UnmatchedRow;
+    jami?: { sales_sum: number[] };
   };
 };
 
