@@ -309,7 +309,7 @@ function CampaignRow({
 
 function Section({ title, subtitle, children }: { title: string; subtitle?: string; children: React.ReactNode }) {
   return (
-    <div className="bg-bg2 border border-border rounded-lg shadow overflow-hidden">
+    <div className="bg-bg2 border border-border rounded-lg shadow overflow-visible">
       <div className="px-4 py-3 border-b border-border">
         <div className="text-[13px] font-semibold">{title}</div>
         {subtitle && <div className="text-[11px] text-text3 mt-0.5">{subtitle}</div>}
