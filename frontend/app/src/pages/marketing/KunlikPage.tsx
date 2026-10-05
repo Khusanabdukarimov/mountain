@@ -9,6 +9,7 @@ import {
   saveKunlikPlan, saveKunlikOverride,
   getKunlikSections, createKunlikSection, deleteKunlikSection, getKunlikSegment,
   getKunlikJamiStats, getUfFieldOptions,
+  getTargetologs,
   MONTH_KEYS, MONTH_LABELS,
 } from "@/lib/api/meta";
 import type { MonthKey, KunlikCustomSection } from "@/lib/api/meta";
@@ -110,6 +111,7 @@ export default function KunlikPage() {
   const qCrm      = useQuery({ queryKey: ["marketing/kunlik", month, year, targetologs, masulIds], queryFn: () => getKunlikHisobot(month, year, targetologs, masulIds) });
   const qPlan     = useQuery({ queryKey: ["marketing/kunlik-meta", month, year], queryFn: () => getKunlikMeta(month, year) });
   const qSections = useQuery({ queryKey: ["kunlik-sections"], queryFn: getKunlikSections, staleTime: Infinity });
+  const qTargetologs = useQuery({ queryKey: ["targetologs"], queryFn: getTargetologs, staleTime: 60_000 });
 
   const qJamiStats = useQuery({
     queryKey: ["kunlik-jami-stats", month, year, masulIds],
@@ -387,10 +389,15 @@ export default function KunlikPage() {
   const isLoading = (qMeta.isLoading && !qMeta.data) || (qCrm.isLoading && !qCrm.data);
   const yearOptions = [DEFAULT_YEAR, DEFAULT_YEAR - 1, DEFAULT_YEAR - 2];
 
-  const TARGETOLOG_OPTIONS = [
-    { value: "u-mark",   label: "U-Mark"   },
-    { value: "dilmurod", label: "Dilmurod" },
-  ];
+  const TARGETOLOG_OPTIONS = useMemo(() => {
+    const loaded = qTargetologs.data ?? [];
+    return loaded.length > 0
+      ? loaded.map(t => ({ value: t.key, label: t.label }))
+      : [
+          { value: "u-mark",   label: "U-Mark"   },
+          { value: "dilmurod", label: "Dilmurod" },
+        ];
+  }, [qTargetologs.data]);
   const MASUL_OPTIONS = [
     { value: 16, label: "Davlatyor" },
     { value: 32, label: "Temurmalik Xoshimjonov" },
