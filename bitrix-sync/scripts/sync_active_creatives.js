@@ -16,7 +16,7 @@ async function main() {
   const url = `https://graph.facebook.com/${version}/${campaignId}/ads`;
   const params = {
     access_token: token,
-    fields: 'id,name,status,effective_status,adset{id,name},creative{id,name}',
+    fields: 'id,name,status,effective_status,adset{id,name},creative{id,name,thumbnail_url}',
     effective_status: '["ACTIVE"]',
     limit: 200,
   };
@@ -39,6 +39,23 @@ async function main() {
       ad.id, account, campaignId, 'AN-JiDDi || TOF || Broad || ABO || 30$ || UZB',
       ad.adset?.id || null, ad.adset?.name || null, ad.name || null,
       ad.creative?.id || null, ad.creative?.name || null,
+    ]);
+    await pool.query(`
+      INSERT INTO meta_creative_cache
+        (ad_id, creative_id, creative_name, thumbnail_url, ads_manager_url, synced_at)
+      VALUES ($1,$2,$3,$4,$5,NOW())
+      ON CONFLICT (ad_id) DO UPDATE SET
+        creative_id=EXCLUDED.creative_id,
+        creative_name=EXCLUDED.creative_name,
+        thumbnail_url=EXCLUDED.thumbnail_url,
+        ads_manager_url=EXCLUDED.ads_manager_url,
+        synced_at=NOW()
+    `, [
+      ad.id,
+      ad.creative?.id || null,
+      ad.creative?.name || null,
+      ad.creative?.thumbnail_url || null,
+      `https://adsmanager.facebook.com/adsmanager/manage/ads?act=${account.replace(/^act_/, '')}&selected_ad_ids=${ad.id}`,
     ]);
     count++;
   }
