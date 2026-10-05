@@ -199,6 +199,7 @@ async function paginate(url, params) {
 // campaign). Keep this short-lived so opening Settings does not hit Graph API
 // on every request.
 let activeCampaignsCache = { expiresAt: 0, rows: [] };
+const adInsightsCache = new Map();
 
 async function fetchActiveCampaigns() {
   if (activeCampaignsCache.expiresAt > Date.now()) return activeCampaignsCache.rows;
@@ -235,6 +236,40 @@ async function fetchActiveCampaigns() {
   const unique = [...new Map(rows.map(row => [row.campaign_name, row])).values()];
   activeCampaignsCache = { expiresAt: Date.now() + 5 * 60_000, rows: unique };
   return unique;
+}
+
+async function fetchAdInsights(since, until, campaignIds) {
+  const ids = [...new Set(campaignIds.filter(Boolean))].sort();
+  if (!ids.length || !token()) return new Map();
+  const key = `${since}|${until}|${ids.join(',')}`;
+  const cached = adInsightsCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.rows;
+
+  const result = new Map();
+  for (const acct of allAccountIds()) {
+    try {
+      const rows = await paginate(`${BASE}/${acct}/insights`, {
+        access_token: token(),
+        fields: 'ad_id,ad_name,spend,impressions,actions,video_thruplay_watched_actions',
+        level: 'ad',
+        time_range: JSON.stringify({ since, until }),
+        filtering: JSON.stringify([{ field: 'campaign.id', operator: 'IN', value: ids }]),
+        limit: 500,
+      });
+      for (const row of rows) {
+        const prev = result.get(row.ad_id) || { spend: 0, impressions: 0, hook_views: 0, thruplay_views: 0 };
+        prev.spend += parseFloat(row.spend || 0);
+        prev.impressions += parseInt(row.impressions || 0, 10);
+        prev.hook_views += actionVal(row.actions, VIDEO_VIEW_TYPES);
+        prev.thruplay_views += sumActionValues(row.video_thruplay_watched_actions);
+        result.set(row.ad_id, prev);
+      }
+    } catch (err) {
+      console.warn(`[campaigns/creatives] ad insights acct=${acct} failed:`, err.message);
+    }
+  }
+  adInsightsCache.set(key, { expiresAt: Date.now() + 60_000, rows: result });
+  return result;
 }
 
 // ── Row aggregation (mirrors Python ads_to_table) ──────────────
@@ -1319,8 +1354,9 @@ router.get('/creatives', async (req, res) => {
       SELECT
         COALESCE(fl.adset_name, 'N/A')    AS adset_name,
         COALESCE(fl.campaign_name, 'N/A') AS campaign_name,
-        MAX(fl.ad_id)                     AS ad_id,
-        MAX(fl.ad_name)                   AS ad_name,
+        fl.ad_id                          AS ad_id,
+        fl.ad_name                        AS ad_name,
+        MAX(fl.campaign_id)               AS campaign_id,
         COUNT(DISTINCT fl.id)::int        AS meta_leads,
         COUNT(DISTINCT CASE WHEN le.id IS NOT NULL                                            THEN fl.id END)::int AS in_bitrix,
         COUNT(DISTINCT CASE WHEN le.id IS NULL                                                THEN fl.id END)::int AS not_in_bitrix,
@@ -1341,7 +1377,7 @@ router.get('/creatives', async (req, res) => {
       LEFT JOIN stages ds ON ds.id = dp.stage_id
       WHERE (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date >= $1::date
         AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date <= $2::date
-      GROUP BY fl.adset_name, fl.campaign_name
+      GROUP BY fl.adset_name, fl.campaign_name, fl.ad_id, fl.ad_name
       ORDER BY meta_leads DESC
     `, [since, until, sotuvFrom, sotuvTo]);
 
@@ -1428,13 +1464,13 @@ router.get('/creatives', async (req, res) => {
     // yet. New campaigns commonly have active creatives before the first form
     // submission, so facebook_leads alone is not a complete creative list.
     const { rows: activeRows } = await pool.query(`
-      SELECT ad_id, campaign_name, adset_name, ad_name, creative_id, creative_name
+      SELECT ad_id, campaign_id, campaign_name, adset_name, ad_name, creative_id, creative_name
       FROM meta_active_creatives
       WHERE status = 'ACTIVE'
     `);
 
     // 3. Creative name cache
-    const adIds = qualRows.map(r => r.ad_id).filter(Boolean);
+    const adIds = [...qualRows.map(r => r.ad_id), ...activeRows.map(r => r.ad_id)].filter(Boolean);
     const creativeMap = {};
     if (adIds.length) {
       const { rows: crRows } = await pool.query(
@@ -1444,9 +1480,20 @@ router.get('/creatives', async (req, res) => {
       for (const cr of crRows) creativeMap[cr.ad_id] = cr;
     }
 
+    const adMetrics = await fetchAdInsights(
+      since,
+      until,
+      [...qualRows.map(r => r.campaign_id), ...activeRows.map(r => r.campaign_id)],
+    );
+
     const result = qualRows.map(r => {
       const cr = creativeMap[r.ad_id] || {};
       const displayName = cr.video_title || cr.creative_name || r.ad_name || null;
+      const adMetric = adMetrics.get(r.ad_id);
+      const fallbackRate = rateMap[`${r.adset_name}|${r.campaign_name}`] || {};
+      const impressions = adMetric?.impressions ?? fallbackRate.impressions ?? 0;
+      const hookViews = adMetric?.hook_views ?? fallbackRate.hook_views ?? 0;
+      const thruplayViews = adMetric?.thruplay_views ?? fallbackRate.thruplay_views ?? 0;
       return {
       adset_name:    r.adset_name,
       campaign_name: r.campaign_name,
@@ -1456,12 +1503,12 @@ router.get('/creatives', async (req, res) => {
       thumbnail_url:   cr.thumbnail_url || null,
       ads_manager_url: cr.ads_manager_url || null,
       creative_platform: cr.creative_platform || null,
-      spend:         spendMap[`${r.adset_name}|${r.campaign_name}`] ?? 0,
-      impressions:      rateMap[`${r.adset_name}|${r.campaign_name}`]?.impressions ?? 0,
-      hook_views:        rateMap[`${r.adset_name}|${r.campaign_name}`]?.hook_views ?? 0,
-      thruplay_views:    rateMap[`${r.adset_name}|${r.campaign_name}`]?.thruplay_views ?? 0,
-      hook_rate:     rateMap[`${r.adset_name}|${r.campaign_name}`]?.hook_rate ?? 0,
-      hold_rate:     rateMap[`${r.adset_name}|${r.campaign_name}`]?.hold_rate ?? 0,
+      spend:         adMetric?.spend ?? spendMap[`${r.adset_name}|${r.campaign_name}`] ?? 0,
+      impressions,
+      hook_views:        hookViews,
+      thruplay_views:    thruplayViews,
+      hook_rate:     impressions ? round2(hookViews / impressions * 100) : 0,
+      hold_rate:     hookViews ? round2(thruplayViews / hookViews * 100) : 0,
       meta_leads:    r.meta_leads,
       in_bitrix:     r.in_bitrix,
       not_in_bitrix: r.not_in_bitrix,
@@ -1481,6 +1528,10 @@ router.get('/creatives', async (req, res) => {
     for (const r of activeRows) {
       if (seenAdIds.has(r.ad_id)) continue;
       const cr = creativeMap[r.ad_id] || {};
+      const adMetric = adMetrics.get(r.ad_id);
+      const impressions = adMetric?.impressions ?? 0;
+      const hookViews = adMetric?.hook_views ?? 0;
+      const thruplayViews = adMetric?.thruplay_views ?? 0;
       result.push({
         adset_name: r.adset_name || 'N/A',
         campaign_name: r.campaign_name,
@@ -1490,8 +1541,9 @@ router.get('/creatives', async (req, res) => {
         thumbnail_url: cr.thumbnail_url || null,
         ads_manager_url: cr.ads_manager_url || null,
         creative_platform: cr.creative_platform || null,
-        spend: 0, impressions: 0, hook_views: 0, thruplay_views: 0,
-        hook_rate: 0, hold_rate: 0,
+        spend: adMetric?.spend ?? 0, impressions, hook_views: hookViews, thruplay_views: thruplayViews,
+        hook_rate: impressions ? round2(hookViews / impressions * 100) : 0,
+        hold_rate: hookViews ? round2(thruplayViews / hookViews * 100) : 0,
         meta_leads: 0, in_bitrix: 0, not_in_bitrix: 0,
         sifatli: 0, sifatsiz: 0, bekor_boldi: 0, konsultatsiya_otdi: 0,
         sotuv_boldi: 0, sotuv_sum: 0, sifat_rate: 0,
