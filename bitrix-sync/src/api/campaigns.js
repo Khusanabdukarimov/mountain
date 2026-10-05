@@ -110,6 +110,24 @@ pool.query(`
 `).catch(err => console.error('[campaigns] meta_creative_cache migration:', err.message));
 
 pool.query(`
+  CREATE TABLE IF NOT EXISTS meta_active_creatives (
+    ad_id         TEXT PRIMARY KEY,
+    account_id    TEXT,
+    campaign_id   TEXT,
+    campaign_name TEXT NOT NULL,
+    adset_id      TEXT,
+    adset_name    TEXT,
+    ad_name       TEXT,
+    creative_id   TEXT,
+    creative_name TEXT,
+    status        TEXT NOT NULL DEFAULT 'ACTIVE',
+    synced_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS idx_meta_active_creatives_campaign
+    ON meta_active_creatives(campaign_name);
+`).catch(err => console.error('[campaigns] meta_active_creatives init:', err.message));
+
+pool.query(`
   CREATE TABLE IF NOT EXISTS meta_ad_daily (
     date          DATE        NOT NULL,
     adset_id      TEXT        NOT NULL,
@@ -1406,6 +1424,15 @@ router.get('/creatives', async (req, res) => {
       };
     }
 
+    // Include currently active Meta ads even when they have generated no lead
+    // yet. New campaigns commonly have active creatives before the first form
+    // submission, so facebook_leads alone is not a complete creative list.
+    const { rows: activeRows } = await pool.query(`
+      SELECT ad_id, campaign_name, adset_name, ad_name, creative_id, creative_name
+      FROM meta_active_creatives
+      WHERE status = 'ACTIVE'
+    `);
+
     // 3. Creative name cache
     const adIds = qualRows.map(r => r.ad_id).filter(Boolean);
     const creativeMap = {};
@@ -1449,6 +1476,28 @@ router.get('/creatives', async (req, res) => {
         : 0,
       };
     });
+
+    const seenAdIds = new Set(qualRows.map(r => r.ad_id).filter(Boolean));
+    for (const r of activeRows) {
+      if (seenAdIds.has(r.ad_id)) continue;
+      const cr = creativeMap[r.ad_id] || {};
+      result.push({
+        adset_name: r.adset_name || 'N/A',
+        campaign_name: r.campaign_name,
+        ad_id: r.ad_id,
+        ad_name: cr.video_title || cr.creative_name || r.creative_name || r.ad_name || null,
+        post_url: cr.post_url || null,
+        thumbnail_url: cr.thumbnail_url || null,
+        ads_manager_url: cr.ads_manager_url || null,
+        creative_platform: cr.creative_platform || null,
+        spend: 0, impressions: 0, hook_views: 0, thruplay_views: 0,
+        hook_rate: 0, hold_rate: 0,
+        meta_leads: 0, in_bitrix: 0, not_in_bitrix: 0,
+        sifatli: 0, sifatsiz: 0, bekor_boldi: 0, konsultatsiya_otdi: 0,
+        sotuv_boldi: 0, sotuv_sum: 0, sifat_rate: 0,
+        is_active: true,
+      });
+    }
 
     res.json({ month: monthParam, year: yearParam, creatives: result });
   } catch (err) {
