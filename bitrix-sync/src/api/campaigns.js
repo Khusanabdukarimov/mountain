@@ -515,7 +515,7 @@ router.get('/form-stats', async (req, res) => {
       -- LATERAL per fb-lead, which seq-scans and exhausts the pool). A returning
       -- contact's phone can match several Bitrix cards; only the newest counts.
       lead_latest AS (
-        SELECT DISTINCT ON (last9) last9, l.id, l.stage_id FROM (
+        SELECT DISTINCT ON (last9) last9, l.id, l.stage_id, l.utm_campaign FROM (
           SELECT lp.phone_norm AS last9, lp.lead_id
           FROM lead_phones lp
           WHERE lp.phone_norm <> ''
@@ -547,7 +547,10 @@ router.get('/form-stats', async (req, res) => {
         COUNT(DISTINCT CASE WHEN s.bitrix_id = 'UC_NAZK5J' OR ds.bitrix_id = 'UC_NAZK5J' THEN fl.id END)::int                AS bekor_boldi,
         COALESCE(sc.sotuv_boldi, 0)::int                                                                                       AS sotuv_boldi
       FROM facebook_leads fl
-      LEFT JOIN lead_latest le ON le.last9 = fl.phone_norm AND fl.phone_norm <> ''
+      LEFT JOIN lead_latest le
+        ON le.last9 = fl.phone_norm
+       AND fl.phone_norm <> ''
+       AND le.utm_campaign = fl.campaign_name
       LEFT JOIN stages s  ON s.id  = le.stage_id
       LEFT JOIN deal_latest dp ON dp.last9 = fl.phone_norm AND fl.phone_norm <> ''
       LEFT JOIN stages ds ON ds.id = dp.stage_id
@@ -916,7 +919,7 @@ router.get('/forms', async (req, res) => {
     // Latest-card-wins: only the newest phone-matched card's stage counts (see /form-stats).
     const { rows: sifatliRows } = await pool.query(`
       WITH lead_latest AS (
-        SELECT DISTINCT ON (last9) last9, l.id, l.stage_id FROM (
+        SELECT DISTINCT ON (last9) last9, l.id, l.stage_id, l.utm_campaign FROM (
           SELECT lp.phone_norm AS last9, lp.lead_id
           FROM lead_phones lp WHERE lp.phone_norm <> ''
         ) p JOIN leads l ON l.id = p.lead_id
@@ -936,7 +939,10 @@ router.get('/forms', async (req, res) => {
             OR (dp.deal_id IS NOT NULL AND ds.bitrix_id IN ('THINKING','UC_KXC3ZW','CONSULTATION','UC_L28G68','NOT_TRANSFERRED','UC_5G8244','CONVERTED_CONSULT','CONVERTED','UC_NAZK5J','RECYCLED'))
           THEN fl.id END)::int AS sifatli_lid
       FROM facebook_leads fl
-      LEFT JOIN lead_latest le ON le.last9 = fl.phone_norm AND fl.phone_norm <> ''
+      LEFT JOIN lead_latest le
+        ON le.last9 = fl.phone_norm
+       AND fl.phone_norm <> ''
+       AND le.utm_campaign = fl.campaign_name
       LEFT JOIN stages s ON s.id = le.stage_id
       LEFT JOIN deal_latest dp ON dp.last9 = fl.phone_norm AND fl.phone_norm <> ''
       LEFT JOIN stages ds ON ds.id = dp.stage_id
@@ -1335,10 +1341,11 @@ router.get('/creatives', async (req, res) => {
   const sotuvTo   = req.query.sotuv_to   || until;
 
   try {
-    // 1. Lead quality stats — match facebook_leads → Bitrix24 leads by phone (last 9 digits)
+    // 1. Lead quality stats — match each form lead to the Bitrix campaign UTM
+    // and keep the creative/ad breakdown intact.
     const { rows: qualRows } = await pool.query(`
       WITH lead_latest AS (
-        SELECT DISTINCT ON (last9) last9, l.id, l.stage_id FROM (
+        SELECT DISTINCT ON (last9) last9, l.id, l.stage_id, l.utm_campaign FROM (
           SELECT lp.phone_norm AS last9, lp.lead_id
           FROM lead_phones lp WHERE lp.phone_norm <> ''
         ) p JOIN leads l ON l.id = p.lead_id
@@ -1371,7 +1378,10 @@ router.get('/creatives', async (req, res) => {
       FROM facebook_leads fl
       -- Latest-card-wins (see /form-stats): only the newest phone-matched
       -- lead/deal determines the quality columns for a returning contact.
-      LEFT JOIN lead_latest le ON le.last9 = fl.phone_norm AND fl.phone_norm <> ''
+      LEFT JOIN lead_latest le
+        ON le.last9 = fl.phone_norm
+       AND fl.phone_norm <> ''
+       AND le.utm_campaign = fl.campaign_name
       LEFT JOIN stages s ON s.id = le.stage_id
       LEFT JOIN deal_latest dp ON dp.last9 = fl.phone_norm AND fl.phone_norm <> ''
       LEFT JOIN stages ds ON ds.id = dp.stage_id
