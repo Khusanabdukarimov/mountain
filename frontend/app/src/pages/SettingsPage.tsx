@@ -128,11 +128,11 @@ function CampaignAssignmentsSection() {
         <div className="mb-3 flex flex-wrap items-end gap-2 rounded-lg border border-border bg-bg3 p-3">
           <label className="flex min-w-[180px] flex-1 flex-col gap-1 text-[10px] text-text3">
             Ism
-            <input value={newLabel} onChange={e => { setNewLabel(e.target.value); if (!newKey) setNewKey(e.target.value.toLowerCase().trim().replace(/\s+/g, '-')); }} placeholder="Masalan, Aziza" className="rounded border border-border bg-bg2 px-2 py-1.5 text-[12px] text-text outline-none" />
+            <input value={newLabel} onChange={e => { setNewLabel(e.target.value); if (!newKey) setNewKey(e.target.value.toLowerCase().trim().replace(/\s+/g, '-')); }} placeholder="Masalan, Mountain Great" className="rounded border border-border bg-bg2 px-2 py-1.5 text-[12px] text-text outline-none" />
           </label>
           <label className="flex min-w-[160px] flex-1 flex-col gap-1 text-[10px] text-text3">
             Kalit
-            <input value={newKey} onChange={e => setNewKey(e.target.value.toLowerCase())} placeholder="aziza" className="rounded border border-border bg-bg2 px-2 py-1.5 text-[12px] text-text outline-none" />
+            <input value={newKey} onChange={e => setNewKey(e.target.value.toLowerCase())} placeholder="mountain-great" className="rounded border border-border bg-bg2 px-2 py-1.5 text-[12px] text-text outline-none" />
           </label>
           <button disabled={!newLabel.trim() || !newKey.trim() || addMut.isPending} onClick={() => addMut.mutate()} className="rounded bg-primary px-3 py-1.5 text-[11px] text-white disabled:opacity-50">Qo'shish</button>
         </div>
