@@ -23,7 +23,14 @@ function accountId() {
 
 // Returns all configured ad account IDs (primary + optional extras)
 function allAccountIds() {
-  const accounts = [accountId()];
+  const accounts = [];
+  const primaryIds = [
+    process.env.META_AD_ACCOUNT_ID || '',
+    process.env.FB_AD_ACCOUNT_ID || '',
+  ];
+  for (const id of primaryIds) {
+    if (id) accounts.push(id.startsWith('act_') ? id : `act_${id}`);
+  }
   const extras = [
     process.env.META_AD_ACCOUNT_ID_2 || '',
     process.env.META_AD_ACCOUNT_ID_3 || '',
@@ -31,7 +38,7 @@ function allAccountIds() {
   for (const id of extras) {
     if (id) accounts.push(id.startsWith('act_') ? id : `act_${id}`);
   }
-  return accounts;
+  return [...new Set(accounts)];
 }
 
 // Returns campaign ID whitelist for a given account (from META_AD_ACCOUNT_ID_2_CAMPAIGN_IDS etc.)
