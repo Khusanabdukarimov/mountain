@@ -169,6 +169,49 @@ async function paginate(url, params) {
   return rows;
 }
 
+// The assignment screen must also show campaigns that are active in Meta but
+// have not produced an insight row yet (for example, a newly launched
+// campaign). Keep this short-lived so opening Settings does not hit Graph API
+// on every request.
+let activeCampaignsCache = { expiresAt: 0, rows: [] };
+
+async function fetchActiveCampaigns() {
+  if (activeCampaignsCache.expiresAt > Date.now()) return activeCampaignsCache.rows;
+  if (!token()) throw new Error('META_ACCESS_TOKEN or FB_ACCESS_TOKEN is not set');
+
+  const rows = [];
+  for (const acct of allAccountIds()) {
+    try {
+      const campaigns = await paginate(`${BASE}/${acct}/campaigns`, {
+        access_token: token(),
+        fields: 'id,name,status,effective_status,objective',
+        effective_status: '["ACTIVE"]',
+        limit: 200,
+      });
+      const whitelist = campaignWhitelist(acct);
+      for (const campaign of campaigns) {
+        if (campaign.status !== 'ACTIVE') continue;
+        if (whitelist && !whitelist.includes(campaign.id)) continue;
+        rows.push({
+          campaign_id: campaign.id,
+          campaign_name: campaign.name,
+          status: campaign.status,
+          objective: campaign.objective || null,
+          account_id: acct,
+        });
+      }
+    } catch (err) {
+      // One inaccessible account must not hide campaigns from the other
+      // configured accounts or the locally cached assignment data.
+      console.warn(`[campaign-assignments] active campaigns acct=${acct} failed:`, err.message);
+    }
+  }
+
+  const unique = [...new Map(rows.map(row => [row.campaign_name, row])).values()];
+  activeCampaignsCache = { expiresAt: Date.now() + 5 * 60_000, rows: unique };
+  return unique;
+}
+
 // ── Row aggregation (mirrors Python ads_to_table) ──────────────
 
 const LEAD_TYPES = new Set([
@@ -2014,6 +2057,22 @@ router.get('/campaign-assignments', async (_req, res) => {
       `SELECT campaign_name, targetolog FROM campaign_targetolog_overrides`
     );
     const overrideMap = Object.fromEntries(overrides.map(o => [o.campaign_name, o.targetolog]));
+
+    // Merge live ACTIVE campaigns from Meta into the DB-backed rows. This is
+    // what makes a just-created campaign appear as unassigned immediately,
+    // even before the hourly/daily insight sync has written any rows.
+    const activeCampaigns = await fetchActiveCampaigns();
+    const dbMap = new Map(campaigns.map(c => [c.campaign_name, c]));
+    for (const active of activeCampaigns) {
+      if (!dbMap.has(active.campaign_name)) {
+        campaigns.push({
+          campaign_name: active.campaign_name,
+          total_leads: 0,
+          total_spend: 0,
+          last_date: null,
+        });
+      }
+    }
 
     const result = campaigns.map(c => ({
       campaign_name: c.campaign_name,
