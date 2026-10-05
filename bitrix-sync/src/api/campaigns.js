@@ -1770,7 +1770,12 @@ async function syncMetaAdDaily(sinceStr, untilStr) {
     for (const acct of allAccountIds()) {
       try {
         const whitelist = campaignWhitelist(acct);
-        const filtering = [{ field: 'campaign.objective', operator: 'IN', value: ['OUTCOME_LEADS', 'LEAD_GENERATION'] }];
+        // Keep historical traffic campaigns in the daily campaign table too.
+        // U-Mark's `Трафик 26.09 | ABO` is OUTCOME_TRAFFIC; excluding it here
+        // made its manual targetolog assignment invisible in the UI.
+        const filtering = [{ field: 'campaign.objective', operator: 'IN', value: [
+          'OUTCOME_LEADS', 'LEAD_GENERATION', 'OUTCOME_TRAFFIC',
+        ] }];
         if (whitelist) filtering.push({ field: 'campaign.id', operator: 'IN', value: whitelist });
         const rows = await paginate(`${BASE}/${acct}/insights`, {
           access_token:   token(),
