@@ -599,7 +599,7 @@ router.get('/rows', async (req, res) => {
           SUM(link_clicks)::int     AS link_clicks
         FROM meta_ad_daily
         WHERE date >= $1::date AND date <= $2::date
-          AND objective IN ('OUTCOME_LEADS','LEAD_GENERATION')
+          AND objective IN ('OUTCOME_LEADS','LEAD_GENERATION','OUTCOME_TRAFFIC')
         GROUP BY campaign_name, adset_name, platform, objective
         ORDER BY SUM(spend) DESC
       `, [fromDate, toDate]);
