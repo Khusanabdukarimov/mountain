@@ -645,8 +645,7 @@ export default function KampaniyalarPage() {
     return m;
   }, [formsQ.data]);
 
-const formDbStatsMap = useMemo(() => {
-    const creatives = creativesQ.data?.creatives ?? [];
+  const formDbStatsMap = useMemo(() => {
     // spend/clicks come from `allRows` (Meta Insights, real adset-level data) —
     // NOT split evenly across a campaign's "active form count" (the old method
     // dumped a campaign's entire spend onto whichever form happened to be the
@@ -654,12 +653,13 @@ const formDbStatsMap = useMemo(() => {
     // fraction of that campaign's adsets).
     const m = new Map<string, { leads: number; sifatli: number; spend: number; clicks: number }>();
     for (const [formId, adsetNames] of formAdsetsMap) {
-      let leads = 0, sifatli = 0, spend = 0, clicks = 0;
-      for (const c of creatives) {
-        if (!adsetNames.has(c.adset_name)) continue;
-        leads   += c.meta_leads ?? 0;
-        sifatli += c.sifatli ?? 0;
-      }
+      // A single adset can feed multiple forms. Do not assign the whole
+      // adset's creative total to every form (15 + 15 = 30); form lead counts
+      // must stay keyed by form_id from /campaigns/forms.
+      const formStats = formLeadsMap.get(formId) ?? { leads: 0, sifatli: 0 };
+      const leads = formStats.leads;
+      const sifatli = formStats.sifatli;
+      let spend = 0, clicks = 0;
       for (const r of allRows) {
         if (!adsetNames.has(r.adset_name)) continue;
         spend  += r.spend;
@@ -668,7 +668,7 @@ const formDbStatsMap = useMemo(() => {
       m.set(formId, { leads, sifatli, spend, clicks });
     }
     return m;
-  }, [formAdsetsMap, creativesQ.data, allRows]);
+  }, [formAdsetsMap, formLeadsMap, allRows]);
 
   // Hide forms with no activity in the selected period (0 leads AND $0 spend AND
   // 0 clicks) — a date filter should only surface forms that actually ran/produced
