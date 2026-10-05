@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Topbar } from '@/components/Topbar';
 import { Skeleton } from '@/components/Skeleton';
@@ -8,14 +8,13 @@ import {
   getCampaignAssignments,
   assignCampaign,
   unassignCampaign,
+  getTargetologs,
+  createTargetolog,
   type CampaignAssignment,
 } from '@/lib/api/meta';
 import { X, Plus, AlertCircle } from 'lucide-react';
 
-const TARGETOLOG_LABELS: Record<string, { label: string; color: string }> = {
-  dilmurod:   { label: 'Dilmurod',   color: '#2196F3' },
-  'u-mark':   { label: 'U-Mark',     color: '#9C27B0' },
-};
+const TARGETOLOG_COLORS = ['#2196F3', '#9C27B0', '#00A884', '#FF9800', '#E91E63', '#607D8B'];
 
 export default function SettingsPage() {
   const cfgQ = useQuery({ queryKey: ['app/config'], queryFn: getConfig, staleTime: Infinity });
@@ -54,7 +53,30 @@ export default function SettingsPage() {
 function CampaignAssignmentsSection() {
   const qc = useQueryClient();
   const toast = useToast();
-  const [filter, setFilter] = useState<'all' | 'unassigned' | 'dilmurod' | 'u-mark'>('unassigned');
+  const [filter, setFilter] = useState('unassigned');
+  const [adding, setAdding] = useState(false);
+  const [newLabel, setNewLabel] = useState('');
+  const [newKey, setNewKey] = useState('');
+
+  const targetologsQ = useQuery({
+    queryKey: ['targetologs'],
+    queryFn: getTargetologs,
+    staleTime: 60_000,
+  });
+  const targetologs = useMemo(() => targetologsQ.data ?? [], [targetologsQ.data]);
+  const targetologLabels = useMemo(() => Object.fromEntries(
+    targetologs.map((t, i) => [t.key, { label: t.label, color: TARGETOLOG_COLORS[i % TARGETOLOG_COLORS.length] }])
+  ), [targetologs]);
+
+  const addMut = useMutation({
+    mutationFn: () => createTargetolog(newKey, newLabel),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['targetologs'] });
+      setAdding(false); setNewKey(''); setNewLabel('');
+      toast.success('Saqlandi', 'Yangi targetolog qo\'shildi');
+    },
+    onError: (e: Error) => toast.error('Xato', e.message),
+  });
 
   const { data, isLoading } = useQuery({
     queryKey: ['campaign-assignments'],
@@ -94,14 +116,34 @@ function CampaignAssignmentsSection() {
       title="Kampaniyalar sozlamasi"
       subtitle="Targetologga biriktirilmagan yoki noto'g'ri biriktirilgan kampaniyalarni boshqaring"
     >
+      <div className="flex justify-end mb-3">
+        <button
+          onClick={() => setAdding(v => !v)}
+          className="flex items-center gap-1.5 rounded-md border border-primary px-3 py-1.5 text-[11px] text-primary hover:bg-primary/10"
+        >
+          <Plus size={13} /> Yangi targetolog
+        </button>
+      </div>
+      {adding && (
+        <div className="mb-3 flex flex-wrap items-end gap-2 rounded-lg border border-border bg-bg3 p-3">
+          <label className="flex min-w-[180px] flex-1 flex-col gap-1 text-[10px] text-text3">
+            Ism
+            <input value={newLabel} onChange={e => { setNewLabel(e.target.value); if (!newKey) setNewKey(e.target.value.toLowerCase().trim().replace(/\s+/g, '-')); }} placeholder="Masalan, Aziza" className="rounded border border-border bg-bg2 px-2 py-1.5 text-[12px] text-text outline-none" />
+          </label>
+          <label className="flex min-w-[160px] flex-1 flex-col gap-1 text-[10px] text-text3">
+            Kalit
+            <input value={newKey} onChange={e => setNewKey(e.target.value.toLowerCase())} placeholder="aziza" className="rounded border border-border bg-bg2 px-2 py-1.5 text-[12px] text-text outline-none" />
+          </label>
+          <button disabled={!newLabel.trim() || !newKey.trim() || addMut.isPending} onClick={() => addMut.mutate()} className="rounded bg-primary px-3 py-1.5 text-[11px] text-white disabled:opacity-50">Qo'shish</button>
+        </div>
+      )}
       {/* Filter tabs */}
       <div className="flex gap-2 mb-3 flex-wrap">
         {([
           { key: 'unassigned', label: `Biriktirilmagan (${unassignedCount})` },
-          { key: 'dilmurod',   label: 'Dilmurod' },
-          { key: 'u-mark', label: 'U-Mark' },
+          ...targetologs.map(t => ({ key: t.key, label: t.label })),
           { key: 'all',        label: 'Hammasi' },
-        ] as { key: typeof filter; label: string }[]).map(t => (
+        ]).map(t => (
           <button
             key={t.key}
             onClick={() => setFilter(t.key)}
@@ -133,6 +175,7 @@ function CampaignAssignmentsSection() {
             <CampaignRow
               key={c.campaign_name}
               c={c}
+              targetologLabels={targetologLabels}
               onAssign={(targ) => assignMut.mutate({ name: c.campaign_name, targ })}
               onUnassign={() => unassignMut.mutate(c.campaign_name)}
               busy={assignMut.isPending || unassignMut.isPending}
@@ -145,15 +188,16 @@ function CampaignAssignmentsSection() {
 }
 
 function CampaignRow({
-  c, onAssign, onUnassign, busy,
+  c, targetologLabels, onAssign, onUnassign, busy,
 }: {
   c: CampaignAssignment;
+  targetologLabels: Record<string, { label: string; color: string }>;
   onAssign: (targ: string) => void;
   onUnassign: () => void;
   busy: boolean;
 }) {
   const [open, setOpen] = useState(false);
-  const tInfo = c.targetolog ? TARGETOLOG_LABELS[c.targetolog] : null;
+  const tInfo = c.targetolog ? targetologLabels[c.targetolog] ?? { label: c.targetolog, color: '#607D8B' } : null;
 
   return (
     <div style={{
@@ -212,7 +256,7 @@ function CampaignRow({
             borderRadius: 8, boxShadow: '0 4px 16px rgba(0,0,0,0.2)',
             minWidth: 130, overflow: 'hidden',
           }}>
-            {Object.entries(TARGETOLOG_LABELS).map(([key, info]) => (
+            {Object.entries(targetologLabels).map(([key, info]) => (
               <button
                 key={key}
                 onClick={() => { onAssign(key); setOpen(false); }}
@@ -283,4 +327,3 @@ function Item({ label, value, mono = false }: { label: string; value: string; mo
     </div>
   );
 }
-

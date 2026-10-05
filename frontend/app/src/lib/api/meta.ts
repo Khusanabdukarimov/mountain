@@ -432,6 +432,23 @@ export function getCreativeLeads(adset_name: string, month: MonthKey, year: numb
 
 
 // ── Campaign targetolog management ────────────────────────────────
+export type Targetolog = { key: string; label: string };
+
+export function getTargetologs() {
+  return apiGet<Targetolog[]>('/api/campaigns/targetologs', undefined, API_URL_CRM);
+}
+
+export async function createTargetolog(key: string, label: string) {
+  const { authedFetch, API_URL_CRM } = await import('./client');
+  const res = await authedFetch('/api/campaigns/targetologs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key, label }),
+  }, API_URL_CRM);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json() as Promise<Targetolog>;
+}
+
 export type CampaignAssignment = {
   campaign_name: string;
   total_leads:   number;

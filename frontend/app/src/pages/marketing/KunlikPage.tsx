@@ -860,20 +860,42 @@ function SectionRows({
   onHideMetric?: (key: MetricKey) => void;
 }) {
   const totalCols = days + 4; // name + reja + fakt + var%
+  const leadsTotal = faktTotal({ key: "leads", format: "num" } as MetricDef);
+  const qualifiedTotal = faktTotal({ key: "qual_leads", format: "num" } as MetricDef);
   const meetingsSetTotal = faktTotal({ key: "meetings_set", format: "num" } as MetricDef);
   const meetingsTotal = faktTotal({ key: "meetings", format: "num" } as MetricDef);
   const salesTotal = faktTotal({ key: "sales_count", format: "num" } as MetricDef);
-  const conversionFor = (metric: MetricDef): number | null => {
+  const conversionFor = (metric: MetricDef): { value: number | null; title: string } | undefined => {
     // The Var% badge is used here as a funnel-conversion indicator for these
     // rows, rather than plan attainment.
-    if (metric.key === "qual_leads") return 30;
+    if (metric.key === "qual_leads") {
+      const value = leadsTotal > 0 ? (qualifiedTotal / leadsTotal) * 100 : null;
+      return {
+        value,
+        title: value == null
+          ? "Maqsadli lidlar ÷ Lidlar soni × 100"
+          : `Maqsadli lidlar ÷ Lidlar soni × 100\n${fmtNum(qualifiedTotal)} ÷ ${fmtNum(leadsTotal)} × 100 = ${fmtPct(value, 2)}`,
+      };
+    }
     if (metric.key === "meetings") {
-      return meetingsSetTotal > 0 ? (meetingsTotal / meetingsSetTotal) * 100 : null;
+      const value = meetingsSetTotal > 0 ? (meetingsTotal / meetingsSetTotal) * 100 : null;
+      return {
+        value,
+        title: value == null
+          ? "Uchrashuv o'tkazildi ÷ Uchrashuv belgilandi × 100"
+          : `Uchrashuv o'tkazildi ÷ Uchrashuv belgilandi × 100\n${fmtNum(meetingsTotal)} ÷ ${fmtNum(meetingsSetTotal)} × 100 = ${fmtPct(value, 2)}`,
+      };
     }
     if (metric.key === "sales_count") {
-      return meetingsTotal > 0 ? (salesTotal / meetingsTotal) * 100 : null;
+      const value = meetingsTotal > 0 ? (salesTotal / meetingsTotal) * 100 : null;
+      return {
+        value,
+        title: value == null
+          ? "Sotuvlar soni ÷ Uchrashuv o'tkazildi × 100"
+          : `Sotuvlar soni ÷ Uchrashuv o'tkazildi × 100\n${fmtNum(salesTotal)} ÷ ${fmtNum(meetingsTotal)} × 100 = ${fmtPct(value, 2)}`,
+      };
     }
-    return null;
+    return undefined;
   };
   return (
     <>
@@ -904,7 +926,7 @@ function SectionRows({
           todayDay={todayDay}
           planValue={plans?.[metric.key]}
           faktValue={faktTotal(metric)}
-          conversionValue={conversionFor(metric)}
+          percentageOverride={conversionFor(metric)}
           overrides={overrides?.[metric.key]}
           cellValue={cellValue}
           onPlanSave={(val) => onPlanSave(metric.key, val)}
@@ -918,7 +940,7 @@ function SectionRows({
 
 function MetricRow({
   metric, days, isCurrent, todayDay,
-  planValue, faktValue, conversionValue, overrides, cellValue,
+  planValue, faktValue, percentageOverride, overrides, cellValue,
   onPlanSave, onCellSave, onHide,
 }: {
   metric:      MetricDef;
@@ -927,7 +949,7 @@ function MetricRow({
   todayDay:    number;
   planValue:   number | undefined;
   faktValue:   number;
-  conversionValue: number | null;
+  percentageOverride: { value: number | null; title: string } | undefined;
   overrides:   Record<number, number> | undefined;
   cellValue:   (m: MetricDef, i: number) => number;
   onPlanSave:  (val: number) => Promise<void>;
@@ -942,7 +964,12 @@ function MetricRow({
   const dayRef         = useRef<HTMLInputElement>(null);
   const planCommitting = useRef(false);
 
-  const vp = conversionValue ?? varPct(faktValue, planValue);
+  const vp = percentageOverride ? percentageOverride.value : varPct(faktValue, planValue);
+  const vpTitle = percentageOverride?.title ?? (
+    vp != null && planValue
+      ? `Fakt ÷ Oylik reja × 100\n${faktValue} ÷ ${planValue} × 100 = ${fmtPct(vp, 2)}`
+      : undefined
+  );
   const vpBg = vp == null ? "transparent"
     : vp >= 90  ? "rgba(22,163,74,0.18)"
     : vp >= 50  ? "rgba(217,119,6,0.18)"
@@ -1044,7 +1071,7 @@ function MetricRow({
       {/* Var % */}
       <td className="px-3 py-2 border-l border-border text-center">
         {vp != null ? (
-          <span className="text-[11.5px] font-bold px-2.5 py-0.5 rounded"
+          <span title={vpTitle} className="text-[11.5px] font-bold px-2.5 py-0.5 rounded cursor-help"
             style={{ color: vpColor, background: vpBg }}>
             {fmtPct(vp, 2)}
           </span>

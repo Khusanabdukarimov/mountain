@@ -1930,6 +1930,73 @@ router.get('/uf-field-options', async (req, res) => {
 });
 
 // ── Campaign targetolog management ────────────────────────────────
+// Keep targetologs in the same database as campaign overrides so the
+// Settings page can manage the list without requiring a redeploy.
+pool.query(`
+  CREATE TABLE IF NOT EXISTS targetologs (
+    key        TEXT PRIMARY KEY,
+    label      TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+  )
+`).then(async () => {
+  await pool.query(`
+    INSERT INTO targetologs (key, label) VALUES
+      ('dilmurod', 'Dilmurod'),
+      ('u-mark', 'U-Mark')
+    ON CONFLICT (key) DO NOTHING
+  `);
+}).catch(err => console.error('[campaigns] targetolog table init:', err.message));
+
+// GET /api/campaigns/targetologs
+router.get('/targetologs', async (_req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT key, label FROM targetologs ORDER BY created_at ASC, label ASC`
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('[targetologs]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/campaigns/targetologs { key, label }
+router.post('/targetologs', async (req, res) => {
+  const key = String(req.body?.key || '').trim().toLowerCase();
+  const label = String(req.body?.label || '').trim();
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(key)) {
+    return res.status(400).json({ error: 'key must contain lowercase letters, numbers, and hyphens only' });
+  }
+  if (!label) return res.status(400).json({ error: 'label required' });
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO targetologs (key, label) VALUES ($1, $2)
+       RETURNING key, label`, [key, label]
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'targetolog already exists' });
+    console.error('[targetolog create]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/campaigns/targetologs/:key
+router.delete('/targetologs/:key', async (req, res) => {
+  const key = String(req.params.key || '').trim().toLowerCase();
+  try {
+    const { rowCount } = await pool.query(`DELETE FROM targetologs WHERE key = $1`, [key]);
+    if (!rowCount) return res.status(404).json({ error: 'targetolog not found' });
+    await pool.query(
+      `UPDATE campaign_targetolog_overrides SET targetolog = NULL WHERE targetolog = $1`, [key]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[targetolog delete]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/campaigns/campaign-assignments
 router.get('/campaign-assignments', async (_req, res) => {
   try {
@@ -1982,7 +2049,8 @@ router.get('/campaign-assignments', async (_req, res) => {
 router.post('/campaign-assign', async (req, res) => {
   const { campaign_name, targetolog } = req.body || {};
   if (!campaign_name) return res.status(400).json({ error: 'campaign_name required' });
-  const valid = ['dilmurod', 'u-mark'];
+  const { rows: targetologRows } = await pool.query(`SELECT key FROM targetologs`);
+  const valid = targetologRows.map(row => row.key);
   // null/undefined = explicitly unassigned (shown in "Biriktirilmagan")
   if (targetolog !== null && targetolog !== undefined && targetolog !== '' && !valid.includes(targetolog))
     return res.status(400).json({ error: 'invalid targetolog' });
