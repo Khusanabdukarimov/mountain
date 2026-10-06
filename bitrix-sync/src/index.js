@@ -83,6 +83,12 @@ Promise.all([
       WHERE taqsimot_enabled IS NULL;
     ALTER TABLE responsibles ALTER COLUMN taqsimot_enabled SET DEFAULT FALSE;
     ALTER TABLE responsibles ALTER COLUMN taqsimot_enabled SET NOT NULL;
+    CREATE TABLE IF NOT EXISTS taqsimot_members (
+      responsible_id BIGINT PRIMARY KEY
+    );
+    INSERT INTO taqsimot_members (responsible_id)
+      SELECT id FROM responsibles WHERE id IN (74, 16, 20, 32)
+      ON CONFLICT (responsible_id) DO NOTHING;
     ALTER TABLE responsibles ADD COLUMN IF NOT EXISTS taqsimot_campaign_pct NUMERIC(5,2) NOT NULL DEFAULT 0;
     CREATE TABLE IF NOT EXISTS taqsimot_campaign_settings (
       campaign_name TEXT PRIMARY KEY,

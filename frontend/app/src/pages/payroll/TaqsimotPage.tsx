@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import * as Dialog from "@radix-ui/react-dialog";
 import { Plus, RefreshCw } from "lucide-react";
 import { Topbar } from "@/components/Topbar";
 import { Button } from "@/components/Button";
@@ -69,6 +70,17 @@ async function saveTaqsimot(id: number, pct: number) {
   return res.json() as Promise<{ ok: boolean; total_pct: number; warning: string | null }>;
 }
 
+async function addTaqsimotResponsible(id: number, pct: number) {
+  const res = await authedFetch(`/api/dashboard/taqsimot/${id}/add`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ taqsimot_pct: pct }),
+  }, API_URL_CRM);
+  if (!res.ok) {
+    const payload = await res.json().catch(() => ({}));
+    throw new Error(payload.error || `${res.status} ${res.statusText}`);
+  }
+}
+
 // ── Page ─────────────────────────────────────────────────────────────────────
 
 export default function TaqsimotPage() {
@@ -77,6 +89,7 @@ export default function TaqsimotPage() {
   const [view, setView] = useState("general");
   const [adding, setAdding] = useState(false);
   const [newCampaign, setNewCampaign] = useState("");
+  const [addResponsibleOpen, setAddResponsibleOpen] = useState(false);
   const campaignName = view === "general" ? "" : view;
 
   const { data, isLoading, refetch } = useQuery({
@@ -99,6 +112,11 @@ export default function TaqsimotPage() {
     enabled: adding,
   });
   const campaignQ = useQuery({ queryKey: ["taqsimot-campaign", campaignName], queryFn: () => fetchCampaignSetting(campaignName), enabled: !!campaignName });
+  const candidatesQ = useQuery({
+    queryKey: ["taqsimot-candidates"],
+    queryFn: () => apiGet<{ responsibles: Responsible[] }>("/api/dashboard/taqsimot-candidates", {}, API_URL_CRM),
+    enabled: addResponsibleOpen,
+  });
   const campaignStatsQ = useQuery({
     queryKey: ["taqsimot-campaign-stats", campaignName], queryFn: () => fetchCampaignStats(campaignName),
     enabled: !!campaignName, refetchInterval: 60_000,
@@ -145,6 +163,22 @@ export default function TaqsimotPage() {
     } catch (e) { toast.error("Qo‘shishda xato", (e as Error).message); }
   }
 
+  async function addResponsible(id: number, pct: number) {
+    try {
+      await addTaqsimotResponsible(id, view === "general" ? pct : 0);
+      if (view !== "general" && pct > 0) {
+        await saveCampaignRequest(`/api/dashboard/taqsimot-campaign/${id}`, { campaign_name: campaignName, pct });
+      }
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["taqsimot"] }),
+        qc.invalidateQueries({ queryKey: ["taqsimot-candidates"] }),
+        refreshDistribution(),
+      ]);
+      setAddResponsibleOpen(false);
+      toast.success("Qo‘shildi", "Mas’ul taqsimotga qo‘shildi");
+    } catch (e) { toast.error("Qo‘shishda xato", (e as Error).message); }
+  }
+
   async function handleSave(id: number, pct: number) {
     try {
       const result = await saveTaqsimot(id, pct);
@@ -169,12 +203,25 @@ export default function TaqsimotPage() {
         sub="Xodimlar bo'yicha lid taqsimoti"
         actions={
           <>
+            <Button variant="primary" onClick={() => setAddResponsibleOpen(true)}>
+              <Plus className="w-3.5 h-3.5" /> Mas'ul qo'shish
+            </Button>
             <Button onClick={() => { refetch(); statsQ.refetch(); campaignQ.refetch(); campaignStatsQ.refetch(); }}>
               <RefreshCw className="w-3.5 h-3.5" /> Yangilash
             </Button>
           </>
         }
       />
+
+      {addResponsibleOpen && <AddResponsibleDialog
+        key={view}
+        responsibles={candidatesQ.data?.responsibles ?? []}
+        loading={candidatesQ.isLoading}
+        remaining={Math.max(0, 100 - (view === "general" ? totalRounded : campaignTotal))}
+        stream={view === "general" ? "umumiy lead" : campaignName}
+        onClose={() => setAddResponsibleOpen(false)}
+        onSave={addResponsible}
+      />}
 
       <div className="flex-1 overflow-y-auto px-3 sm:px-[22px] py-3 sm:py-[18px] bg-bg space-y-5">
 
@@ -415,6 +462,58 @@ export default function TaqsimotPage() {
 }
 
 // ── Editable % cell ───────────────────────────────────────────────────────────
+
+function AddResponsibleDialog({ responsibles, loading, remaining, stream, onClose, onSave }: {
+  responsibles: Responsible[];
+  loading: boolean;
+  remaining: number;
+  stream: string;
+  onClose: () => void;
+  onSave: (id: number, pct: number) => Promise<void>;
+}) {
+  const [responsibleId, setResponsibleId] = useState(0);
+  const [pct, setPct] = useState("0");
+  const [saving, setSaving] = useState(false);
+  const value = Number(pct);
+  const selectedId = responsibleId || responsibles[0]?.id || 0;
+  const valid = selectedId > 0 && pct !== "" && Number.isFinite(value) && value >= 0 && value <= remaining;
+
+  async function submit() {
+    if (!valid || saving) return;
+    setSaving(true);
+    try { await onSave(selectedId, value); } finally { setSaving(false); }
+  }
+
+  return <Dialog.Root open onOpenChange={(open) => { if (!open && !saving) onClose(); }}>
+    <Dialog.Portal>
+      <Dialog.Overlay className="fixed inset-0 bg-black/50 backdrop-blur-[2px] z-[300]" />
+      <Dialog.Content className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-[301] bg-bg2 border border-border rounded-xl shadow-xl w-[calc(100%-24px)] max-w-lg max-h-[88vh] overflow-y-auto p-5">
+        <Dialog.Title className="text-[15px] font-semibold text-text">Mas'ul qo'shish</Dialog.Title>
+        <Dialog.Description className="text-[12px] text-text3 mt-1 mb-4">
+          {stream} oqimiga mas'ul qo'shing. Qolgan ulush: {remaining}%.
+        </Dialog.Description>
+        {loading ? <div className="py-6 text-[12px] text-text3">Yuklanmoqda...</div> : responsibles.length ?
+          <div className="space-y-3">
+            <label className="block text-[11px] text-text3">Mas'ul xodim
+              <select value={selectedId} onChange={(e) => setResponsibleId(Number(e.target.value))}
+                className="mt-1 w-full rounded border border-border bg-bg px-3 py-2 text-[12px] text-text">
+                {responsibles.map((r) => <option key={r.id} value={r.id}>{r.full_name} — {r.work_position || "Lavozim ko'rsatilmagan"}</option>)}
+              </select>
+            </label>
+            <label className="block text-[11px] text-text3">Taqsimot ulushi (%)
+              <input type="number" min={0} max={remaining} step={0.1} value={pct} onChange={(e) => setPct(e.target.value)}
+                className="mt-1 w-full rounded border border-border bg-bg px-3 py-2 text-[12px] text-text" />
+            </label>
+            {!valid && <div className="text-[11px] text-red-400">Foiz qolgan ulushdan oshmasligi kerak.</div>}
+          </div> : <div className="py-6 text-center text-[12px] text-text3">Qo'shish uchun faol mas'ul qolmagan.</div>}
+        <div className="flex justify-end gap-2 mt-4">
+          <Button onClick={onClose} disabled={saving}>Bekor qilish</Button>
+          <Button variant="primary" onClick={submit} disabled={!valid || saving}>{saving ? "Saqlanmoqda..." : "Saqlash"}</Button>
+        </div>
+      </Dialog.Content>
+    </Dialog.Portal>
+  </Dialog.Root>;
+}
 
 function TaqsimotRow({
   row,

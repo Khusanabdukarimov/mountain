@@ -2,7 +2,7 @@ const { Router } = require('express');
 const pool = require('../db/pool');
 const fs = require('fs');
 const path = require('path');
-const { CAMPAIGN_NAME, OPERATOR_IDS } = require('../services/distributionCampaign');
+const { CAMPAIGN_NAME } = require('../services/distributionCampaign');
 
 const router = Router();
 
@@ -1212,7 +1212,7 @@ router.get('/taqsimot', async (_req, res) => {
       `SELECT r.id, TRIM(COALESCE(r.name,'') || ' ' || COALESCE(r.last_name,'')) AS full_name,
               r.email, r.work_position, r.taqsimot_pct, r.taqsimot_campaign_pct, r.taqsimot_enabled
        FROM responsibles r
-       WHERE r.active = TRUE AND r.id IN (${OPERATOR_IDS.join(',')})
+       WHERE r.active = TRUE AND r.id IN (SELECT responsible_id FROM taqsimot_members)
        ORDER BY r.name`
     );
     res.json({ responsibles: rows });
@@ -1220,6 +1220,19 @@ router.get('/taqsimot', async (_req, res) => {
     console.error('[dashboard/taqsimot GET]', err.message);
     res.status(500).json({ error: err.message });
   }
+});
+
+router.get('/taqsimot-candidates', async (_req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT r.id, TRIM(COALESCE(r.name,'') || ' ' || COALESCE(r.last_name,'')) AS full_name,
+             r.email, r.work_position, r.taqsimot_pct, r.taqsimot_enabled
+      FROM responsibles r WHERE r.active = TRUE
+        AND NOT EXISTS (SELECT 1 FROM taqsimot_members m WHERE m.responsible_id = r.id)
+      ORDER BY r.name
+    `);
+    res.json({ responsibles: rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 /**
@@ -1232,8 +1245,13 @@ router.post('/taqsimot/:id/add', async (req, res) => {
   if (isNaN(id) || !Number.isFinite(pct) || pct < 0 || pct > 100) {
     return res.status(400).json({ error: 'Invalid responsible id or taqsimot_pct (0–100)' });
   }
-  if (!OPERATOR_IDS.includes(id)) return res.status(403).json({ error: 'Operator taqsimot ro‘yxatida yo‘q' });
   try {
+    const { rows: added } = await pool.query(`
+      INSERT INTO taqsimot_members (responsible_id)
+      SELECT id FROM responsibles WHERE id = $1 AND active = TRUE
+      ON CONFLICT DO NOTHING RETURNING responsible_id
+    `, [id]);
+    if (!added.length) return res.status(409).json({ error: 'Mas’ul topilmadi yoki allaqachon qo‘shilgan' });
     const { rows } = await pool.query(
       `UPDATE responsibles SET taqsimot_enabled = TRUE, taqsimot_pct = $2
        WHERE id = $1 AND active = TRUE
@@ -1259,16 +1277,17 @@ router.put('/taqsimot/:id', async (req, res) => {
   if (isNaN(id) || isNaN(pct) || pct < 0 || pct > 100) {
     return res.status(400).json({ error: 'Invalid id or taqsimot_pct (0–100)' });
   }
-  if (!OPERATOR_IDS.includes(id)) return res.status(403).json({ error: 'Operator taqsimot ro‘yxatida yo‘q' });
   try {
-    await pool.query(
-      `UPDATE responsibles SET taqsimot_pct = $1 WHERE id = $2`,
+    const { rowCount } = await pool.query(
+      `UPDATE responsibles SET taqsimot_pct = $1 WHERE id = $2
+       AND active = TRUE AND id IN (SELECT responsible_id FROM taqsimot_members)`,
       [pct, id]
     );
+    if (!rowCount) return res.status(404).json({ error: 'Mas’ul taqsimotda yo‘q' });
     const { rows } = await pool.query(
       `SELECT SUM(taqsimot_pct)::numeric AS total
        FROM responsibles WHERE taqsimot_pct > 0 AND active = TRUE
-         AND id IN (${OPERATOR_IDS.join(',')})`
+         AND id IN (SELECT responsible_id FROM taqsimot_members)`
     );
     const total = parseFloat(rows[0].total || 0);
     res.json({
@@ -1330,7 +1349,7 @@ router.get('/taqsimot-campaign', async (req, res) => {
                          work_position, COALESCE(m.pct, 0)::float AS pct
                   FROM responsibles r LEFT JOIN taqsimot_campaign_members m
                     ON m.responsible_id = r.id AND m.campaign_name = $1
-                  WHERE r.active = TRUE AND r.id IN (${OPERATOR_IDS.join(',')}) ORDER BY r.name`, [name]),
+                  WHERE r.active = TRUE AND r.id IN (SELECT responsible_id FROM taqsimot_members) ORDER BY r.name`, [name]),
     ]);
     if (!setting.rows.length) return res.status(404).json({ error: 'Campaign topilmadi' });
     res.json({ campaign_name: name, active: setting.rows[0].active === true,
@@ -1347,7 +1366,8 @@ router.put('/taqsimot-campaign/:id', async (req, res) => {
   if (!Number.isInteger(id) || id <= 0 || !Number.isFinite(pct) || pct < 0 || pct > 100) {
     return res.status(400).json({ error: 'Invalid responsible id or percentage' });
   }
-  if (!OPERATOR_IDS.includes(id)) return res.status(403).json({ error: 'Operator taqsimot ro‘yxatida yo‘q' });
+  const { rows: members } = await pool.query('SELECT 1 FROM taqsimot_members WHERE responsible_id = $1', [id]);
+  if (!members.length) return res.status(403).json({ error: 'Mas’ul taqsimotda yo‘q' });
   const name = String(req.body?.campaign_name || CAMPAIGN_NAME);
   try {
     const { rowCount } = await pool.query(`
@@ -1374,7 +1394,7 @@ router.put('/taqsimot-campaign', async (req, res) => {
       const { rows } = await pool.query(
         `SELECT COALESCE(SUM(m.pct), 0)::float AS total FROM taqsimot_campaign_members m
          JOIN responsibles r ON r.id = m.responsible_id
-         WHERE m.campaign_name = $1 AND r.active = TRUE AND r.id IN (${OPERATOR_IDS.join(',')})`, [name]
+         WHERE m.campaign_name = $1 AND r.active = TRUE AND r.id IN (SELECT responsible_id FROM taqsimot_members)`, [name]
       );
       if (Math.abs(rows[0].total - 100) > 0.001) {
         return res.status(400).json({ error: `Campaign foizlari 100% bo'lishi kerak (hozir ${rows[0].total}%)` });
@@ -1427,7 +1447,7 @@ router.get('/taqsimot-stats', async (_req, res) => {
           ))
         ))
       WHERE r.taqsimot_pct > 0 AND r.active = TRUE
-        AND r.id IN (${OPERATOR_IDS.join(',')})
+        AND r.id IN (SELECT responsible_id FROM taqsimot_members)
       GROUP BY r.id, r.name, r.last_name, r.taqsimot_pct
       ORDER BY r.taqsimot_pct DESC
     `, [activeNames]);
@@ -1458,7 +1478,7 @@ router.get('/taqsimot-campaign-stats', async (req, res) => {
           SELECT 1 FROM facebook_leads fl WHERE fl.bitrix_lead_id = l.id AND fl.campaign_name = $1
         )))
       WHERE m.pct > 0 AND r.active = TRUE
-        AND r.id IN (${OPERATOR_IDS.join(',')})
+        AND r.id IN (SELECT responsible_id FROM taqsimot_members)
       GROUP BY r.id, r.name, r.last_name, m.pct
       ORDER BY m.pct DESC
     `, [name]);
