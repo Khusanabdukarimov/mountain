@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { RefreshCw } from "lucide-react";
+import { Plus, RefreshCw } from "lucide-react";
 import { Topbar } from "@/components/Topbar";
 import { Button } from "@/components/Button";
 import { Avatar } from "@/components/Avatar";
@@ -29,6 +29,7 @@ type StatRow = {
 
 type CampaignResponsible = { id: number; full_name: string; work_position: string | null; pct: number };
 type CampaignSetting = { campaign_name: string; active: boolean; responsibles: CampaignResponsible[] };
+type CampaignSummary = { campaign_name: string; active: boolean };
 
 // ── API helpers ───────────────────────────────────────────────────────────────
 
@@ -40,17 +41,17 @@ function fetchStats() {
   return apiGet<{ stats: StatRow[]; date: string }>("/api/dashboard/taqsimot-stats", {}, API_URL_CRM);
 }
 
-function fetchCampaignSetting() {
-  return apiGet<CampaignSetting>("/api/dashboard/taqsimot-campaign", {}, API_URL_CRM);
+function fetchCampaignSetting(name: string) {
+  return apiGet<CampaignSetting>(`/api/dashboard/taqsimot-campaign?campaign_name=${encodeURIComponent(name)}`, {}, API_URL_CRM);
 }
 
-function fetchCampaignStats() {
-  return apiGet<{ stats: StatRow[]; date: string }>("/api/dashboard/taqsimot-campaign-stats", {}, API_URL_CRM);
+function fetchCampaignStats(name: string) {
+  return apiGet<{ stats: StatRow[]; date: string }>(`/api/dashboard/taqsimot-campaign-stats?campaign_name=${encodeURIComponent(name)}`, {}, API_URL_CRM);
 }
 
-async function saveCampaignRequest(path: string, body: object) {
+async function saveCampaignRequest(path: string, body: object, method = "PUT") {
   const res = await authedFetch(path, {
-    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+    method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
   }, API_URL_CRM);
   if (!res.ok) {
     const payload = await res.json().catch(() => ({}));
@@ -73,6 +74,10 @@ async function saveTaqsimot(id: number, pct: number) {
 export default function TaqsimotPage() {
   const qc    = useQueryClient();
   const toast = useToast();
+  const [view, setView] = useState("general");
+  const [adding, setAdding] = useState(false);
+  const [newCampaign, setNewCampaign] = useState("");
+  const campaignName = view === "general" ? "" : view;
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ["taqsimot"],
@@ -84,9 +89,19 @@ export default function TaqsimotPage() {
     queryFn: fetchStats,
     refetchInterval: 60_000,
   });
-  const campaignQ = useQuery({ queryKey: ["taqsimot-campaign"], queryFn: fetchCampaignSetting });
+  const campaignListQ = useQuery({
+    queryKey: ["taqsimot-campaigns"],
+    queryFn: () => apiGet<{ campaigns: CampaignSummary[] }>("/api/dashboard/taqsimot-campaigns", {}, API_URL_CRM),
+  });
+  const campaignOptionsQ = useQuery({
+    queryKey: ["taqsimot-campaign-options"],
+    queryFn: () => apiGet<{ campaigns: string[] }>("/api/dashboard/taqsimot-campaign-options", {}, API_URL_CRM),
+    enabled: adding,
+  });
+  const campaignQ = useQuery({ queryKey: ["taqsimot-campaign", campaignName], queryFn: () => fetchCampaignSetting(campaignName), enabled: !!campaignName });
   const campaignStatsQ = useQuery({
-    queryKey: ["taqsimot-campaign-stats"], queryFn: fetchCampaignStats, refetchInterval: 60_000,
+    queryKey: ["taqsimot-campaign-stats", campaignName], queryFn: () => fetchCampaignStats(campaignName),
+    enabled: !!campaignName, refetchInterval: 60_000,
   });
 
   const rows = data?.responsibles ?? [];
@@ -96,6 +111,7 @@ export default function TaqsimotPage() {
 
   async function refreshDistribution() {
     await Promise.all([
+      qc.invalidateQueries({ queryKey: ["taqsimot-campaigns"] }),
       qc.invalidateQueries({ queryKey: ["taqsimot-campaign"] }),
       qc.invalidateQueries({ queryKey: ["taqsimot-campaign-stats"] }),
       qc.invalidateQueries({ queryKey: ["taqsimot-stats"] }),
@@ -104,17 +120,29 @@ export default function TaqsimotPage() {
 
   async function saveCampaignPct(id: number, pct: number) {
     try {
-      await saveCampaignRequest(`/api/dashboard/taqsimot-campaign/${id}`, { pct });
+      await saveCampaignRequest(`/api/dashboard/taqsimot-campaign/${id}`, { campaign_name: campaignName, pct });
       await refreshDistribution();
     } catch (e) { toast.error("Saqlashda xato", (e as Error).message); }
   }
 
   async function setCampaignActive(active: boolean) {
     try {
-      await saveCampaignRequest("/api/dashboard/taqsimot-campaign", { active });
+      await saveCampaignRequest("/api/dashboard/taqsimot-campaign", { campaign_name: campaignName, active });
       await refreshDistribution();
       toast.success("Saqlandi", active ? "Campaign oqimi yoqildi" : "Campaign oqimi o'chirildi");
     } catch (e) { toast.error("Saqlashda xato", (e as Error).message); }
+  }
+
+  async function addCampaign() {
+    if (!newCampaign) return;
+    try {
+      await saveCampaignRequest("/api/dashboard/taqsimot-campaigns", { campaign_name: newCampaign }, "POST");
+      await qc.invalidateQueries({ queryKey: ["taqsimot-campaigns"] });
+      setView(newCampaign);
+      setNewCampaign("");
+      setAdding(false);
+      toast.success("Qo‘shildi", "Endi operatorlar foizini sozlang");
+    } catch (e) { toast.error("Qo‘shishda xato", (e as Error).message); }
   }
 
   async function handleSave(id: number, pct: number) {
@@ -150,11 +178,41 @@ export default function TaqsimotPage() {
 
       <div className="flex-1 overflow-y-auto px-3 sm:px-[22px] py-3 sm:py-[18px] bg-bg space-y-5">
 
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" onClick={() => setView("general")}
+            className={`px-3 py-2 rounded-lg border text-[12px] ${view === "general" ? "bg-blue-600 text-white border-blue-600" : "bg-bg2 text-text2 border-border hover:text-text"}`}>
+            Umumiy lead
+          </button>
+          {(campaignListQ.data?.campaigns ?? []).map((c) => (
+            <button key={c.campaign_name} type="button" onClick={() => setView(c.campaign_name)} title={c.campaign_name}
+              className={`px-3 py-2 rounded-lg border text-[12px] max-w-[300px] truncate ${view === c.campaign_name ? "bg-blue-600 text-white border-blue-600" : "bg-bg2 text-text2 border-border hover:text-text"}`}>
+              {c.campaign_name}{c.active ? " · Faol" : ""}
+            </button>
+          ))}
+          <button type="button" onClick={() => setAdding(!adding)}
+            className="inline-flex items-center gap-1 px-3 py-2 rounded-lg border border-border bg-bg2 text-text2 hover:text-text text-[12px]">
+            <Plus className="w-3.5 h-3.5" /> Campaign qo‘shish
+          </button>
+        </div>
+
+        {adding && <div className="bg-bg2 border border-border rounded-xl p-4 flex flex-wrap gap-2 items-center">
+          <select value={newCampaign} onChange={(e) => setNewCampaign(e.target.value)}
+            className="min-w-[250px] max-w-full flex-1 bg-bg3 border border-border rounded-lg px-3 py-2 text-[12px] text-text">
+            <option value="">Campaign tanlang</option>
+            {(campaignOptionsQ.data?.campaigns ?? []).filter(name => !(campaignListQ.data?.campaigns ?? []).some(c => c.campaign_name === name))
+              .map(name => <option key={name} value={name}>{name}</option>)}
+          </select>
+          <Button onClick={addCampaign} disabled={!newCampaign}>Qo‘shish</Button>
+          {campaignOptionsQ.isLoading && <span className="text-[11px] text-text3">Yuklanmoqda...</span>}
+          {campaignOptionsQ.isError && <span className="text-[11px] text-red-400">Campaignlar yuklanmadi</span>}
+        </div>}
+
+        {view !== "general" &&
         <div className="bg-bg2 border border-border rounded-xl shadow overflow-hidden">
           <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-4">
             <div>
               <div className="text-[12px] font-semibold text-text">Campaign bo'yicha alohida taqsimot</div>
-              <div className="text-[11px] text-text3 mt-0.5 break-all">{campaignQ.data?.campaign_name ?? "AN-JiDDi || TOF || Broad || ABO || 30$ || UZB"}</div>
+              <div className="text-[11px] text-text3 mt-0.5 break-all">{campaignQ.data?.campaign_name ?? campaignName}</div>
             </div>
             <label className="flex items-center gap-2 text-[12px] text-text shrink-0">
               <input type="checkbox" checked={campaignQ.data?.active ?? false}
@@ -193,8 +251,9 @@ export default function TaqsimotPage() {
               </div>
             </div>
           )}
-        </div>
+        </div>}
 
+        {view === "general" && <>
         {/* ── Settings table ─────────────────────────────────────────── */}
         <div className="bg-bg2 border border-border rounded-xl shadow overflow-hidden">
           <div className="px-4 py-3 border-b border-border">
@@ -349,7 +408,7 @@ export default function TaqsimotPage() {
             </tbody>
           </table>
         </div>
-
+        </>}
       </div>
     </>
   );

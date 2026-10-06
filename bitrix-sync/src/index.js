@@ -91,6 +91,16 @@ Promise.all([
     INSERT INTO taqsimot_campaign_settings (campaign_name, active)
       VALUES ('AN-JiDDi || TOF || Broad || ABO || 30$ || UZB', FALSE)
       ON CONFLICT (campaign_name) DO NOTHING;
+    CREATE TABLE IF NOT EXISTS taqsimot_campaign_members (
+      campaign_name TEXT NOT NULL REFERENCES taqsimot_campaign_settings(campaign_name) ON DELETE CASCADE,
+      responsible_id BIGINT NOT NULL,
+      pct NUMERIC(5,2) NOT NULL DEFAULT 0,
+      PRIMARY KEY (campaign_name, responsible_id)
+    );
+    INSERT INTO taqsimot_campaign_members (campaign_name, responsible_id, pct)
+      SELECT 'AN-JiDDi || TOF || Broad || ABO || 30$ || UZB', id, taqsimot_campaign_pct
+      FROM responsibles WHERE id IN (74, 16, 20, 32)
+      ON CONFLICT (campaign_name, responsible_id) DO NOTHING;
     CREATE TABLE IF NOT EXISTS taqsimot_assignments (
       lead_id BIGINT PRIMARY KEY,
       responsible_id BIGINT NOT NULL,
