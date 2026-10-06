@@ -1,6 +1,6 @@
 const pool = require('../db/pool');
 const { bitrixCall } = require('./bitrix');
-const { CAMPAIGN_NAME } = require('./distributionCampaign');
+const { CAMPAIGN_NAME, OPERATOR_IDS } = require('./distributionCampaign');
 
 /**
  * Distribute a new lead to the responsible with the largest deficit.
@@ -70,6 +70,7 @@ async function distributeLead(leadId, campaignName = null) {
         ${streamFilter}
       WHERE r.${pctColumn} > 0
         AND r.taqsimot_pct > 0
+        AND r.id IN (${OPERATOR_IDS.join(',')})
         AND r.active = TRUE
       GROUP BY r.id, r.name, r.${pctColumn}
       ORDER BY r.id
