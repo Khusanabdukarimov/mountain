@@ -87,10 +87,10 @@ async function addTaqsimotResponsible(id: number, pct: number) {
 export default function TaqsimotPage() {
   const qc    = useQueryClient();
   const toast = useToast();
-  const [view, setView] = useState("general");
+  const [view, setView] = useState<"general" | "campaigns">("general");
+  const [selectedCampaign, setSelectedCampaign] = useState("");
   const [addResponsibleOpen, setAddResponsibleOpen] = useState(false);
   const [rowAddingCampaign, setRowAddingCampaign] = useState<number | null>(null);
-  const campaignName = view === "general" ? "" : view;
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ["taqsimot"],
@@ -106,6 +106,7 @@ export default function TaqsimotPage() {
     queryKey: ["taqsimot-campaigns"],
     queryFn: () => apiGet<{ campaigns: CampaignSummary[] }>("/api/dashboard/taqsimot-campaigns", {}, API_URL_CRM),
   });
+  const campaignName = view === "general" ? "" : selectedCampaign || campaignListQ.data?.campaigns[0]?.campaign_name || "";
   const membershipsQ = useQuery({
     queryKey: ["taqsimot-campaign-memberships"],
     queryFn: () => apiGet<{ memberships: CampaignMembership[] }>("/api/dashboard/taqsimot-campaign-memberships", {}, API_URL_CRM),
@@ -168,8 +169,9 @@ export default function TaqsimotPage() {
         campaign_name: name, responsible_id: id, pct: 0,
       }, "POST");
       await refreshDistribution();
+      setSelectedCampaign(name);
       setRowAddingCampaign(null);
-      toast.success("Qo‘shildi", "Campaign operatorga biriktirildi. Foizni campaign sahifasida kiriting.");
+      toast.success("Qo‘shildi", "Campaign operatorga biriktirildi. Endi foizni kiriting.");
     } catch (e) { toast.error("Qo‘shishda xato", (e as Error).message); }
   }
 
@@ -213,7 +215,7 @@ export default function TaqsimotPage() {
         sub="Xodimlar bo'yicha lid taqsimoti"
         actions={
           <>
-            <Button variant="primary" onClick={() => setAddResponsibleOpen(true)}>
+            <Button variant="primary" onClick={() => setAddResponsibleOpen(true)} disabled={view === "campaigns" && !campaignName}>
               <Plus className="w-3.5 h-3.5" /> Mas'ul qo'shish
             </Button>
             <Button onClick={() => { refetch(); statsQ.refetch(); campaignQ.refetch(); campaignStatsQ.refetch(); }}>
@@ -240,12 +242,10 @@ export default function TaqsimotPage() {
             className={`px-3 py-2 rounded-lg border text-[12px] ${view === "general" ? "bg-blue-600 text-white border-blue-600" : "bg-bg2 text-text2 border-border hover:text-text"}`}>
             Umumiy lead
           </button>
-          {(campaignListQ.data?.campaigns ?? []).map((c) => (
-            <button key={c.campaign_name} type="button" onClick={() => setView(c.campaign_name)} title={c.campaign_name}
-              className={`px-3 py-2 rounded-lg border text-[12px] max-w-[300px] truncate ${view === c.campaign_name ? "bg-blue-600 text-white border-blue-600" : "bg-bg2 text-text2 border-border hover:text-text"}`}>
-              {c.campaign_name}{c.active ? " · Faol" : ""}
-            </button>
-          ))}
+          <button type="button" onClick={() => setView("campaigns")}
+            className={`px-3 py-2 rounded-lg border text-[12px] ${view === "campaigns" ? "bg-blue-600 text-white border-blue-600" : "bg-bg2 text-text2 border-border hover:text-text"}`}>
+            Campaignlar
+          </button>
         </div>
 
         {view !== "general" &&
@@ -253,7 +253,10 @@ export default function TaqsimotPage() {
           <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-4">
             <div>
               <div className="text-[12px] font-semibold text-text">Campaign bo'yicha alohida taqsimot</div>
-              <div className="text-[11px] text-text3 mt-0.5 break-all">{campaignQ.data?.campaign_name ?? campaignName}</div>
+              <select aria-label="Campaign tanlash" value={campaignName} onChange={(e) => { setSelectedCampaign(e.target.value); setRowAddingCampaign(null); }}
+                className="mt-1 max-w-full rounded border border-border bg-bg px-2 py-1 text-[11px] text-text">
+                {(campaignListQ.data?.campaigns ?? []).map(c => <option key={c.campaign_name} value={c.campaign_name}>{c.campaign_name}</option>)}
+              </select>
             </div>
             <label className="flex items-center gap-2 text-[12px] text-text shrink-0">
               <input type="checkbox" checked={campaignQ.data?.active ?? false}
