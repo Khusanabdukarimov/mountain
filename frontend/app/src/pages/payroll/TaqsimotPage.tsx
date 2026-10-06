@@ -28,9 +28,10 @@ type StatRow = {
   deficit_pct: number | null;
 };
 
-type CampaignResponsible = { id: number; full_name: string; work_position: string | null; pct: number };
+type CampaignResponsible = { id: number; full_name: string; work_position: string | null; pct: number; attached: boolean };
 type CampaignSetting = { campaign_name: string; active: boolean; responsibles: CampaignResponsible[] };
 type CampaignSummary = { campaign_name: string; active: boolean };
+type CampaignMembership = { responsible_id: number; campaign_name: string; pct: number };
 
 // ── API helpers ───────────────────────────────────────────────────────────────
 
@@ -90,6 +91,7 @@ export default function TaqsimotPage() {
   const [adding, setAdding] = useState(false);
   const [newCampaign, setNewCampaign] = useState("");
   const [addResponsibleOpen, setAddResponsibleOpen] = useState(false);
+  const [rowAddingCampaign, setRowAddingCampaign] = useState<number | null>(null);
   const campaignName = view === "general" ? "" : view;
 
   const { data, isLoading, refetch } = useQuery({
@@ -106,10 +108,14 @@ export default function TaqsimotPage() {
     queryKey: ["taqsimot-campaigns"],
     queryFn: () => apiGet<{ campaigns: CampaignSummary[] }>("/api/dashboard/taqsimot-campaigns", {}, API_URL_CRM),
   });
+  const membershipsQ = useQuery({
+    queryKey: ["taqsimot-campaign-memberships"],
+    queryFn: () => apiGet<{ memberships: CampaignMembership[] }>("/api/dashboard/taqsimot-campaign-memberships", {}, API_URL_CRM),
+  });
   const campaignOptionsQ = useQuery({
     queryKey: ["taqsimot-campaign-options"],
     queryFn: () => apiGet<{ campaigns: string[] }>("/api/dashboard/taqsimot-campaign-options", {}, API_URL_CRM),
-    enabled: adding,
+    enabled: adding || rowAddingCampaign !== null,
   });
   const campaignQ = useQuery({ queryKey: ["taqsimot-campaign", campaignName], queryFn: () => fetchCampaignSetting(campaignName), enabled: !!campaignName });
   const candidatesQ = useQuery({
@@ -132,6 +138,7 @@ export default function TaqsimotPage() {
   async function refreshDistribution() {
     await Promise.all([
       qc.invalidateQueries({ queryKey: ["taqsimot-campaigns"] }),
+      qc.invalidateQueries({ queryKey: ["taqsimot-campaign-memberships"] }),
       qc.invalidateQueries({ queryKey: ["taqsimot-campaign"] }),
       qc.invalidateQueries({ queryKey: ["taqsimot-campaign-stats"] }),
       qc.invalidateQueries({ queryKey: ["taqsimot-stats"] }),
@@ -162,6 +169,21 @@ export default function TaqsimotPage() {
       setNewCampaign("");
       setAdding(false);
       toast.success("Qo‘shildi", "Endi operatorlar foizini sozlang");
+    } catch (e) { toast.error("Qo‘shishda xato", (e as Error).message); }
+  }
+
+  async function addCampaignToOperator(id: number, name: string) {
+    if (!name) return;
+    try {
+      if (!(campaignListQ.data?.campaigns ?? []).some(c => c.campaign_name === name)) {
+        await saveCampaignRequest("/api/dashboard/taqsimot-campaigns", { campaign_name: name }, "POST");
+      }
+      await saveCampaignRequest("/api/dashboard/taqsimot-campaign-members", {
+        campaign_name: name, responsible_id: id, pct: 0,
+      }, "POST");
+      await refreshDistribution();
+      setRowAddingCampaign(null);
+      toast.success("Qo‘shildi", "Campaign operatorga biriktirildi. Foizni campaign sahifasida kiriting.");
     } catch (e) { toast.error("Qo‘shishda xato", (e as Error).message); }
   }
 
@@ -276,18 +298,28 @@ export default function TaqsimotPage() {
           <table className="w-full text-[12.5px]">
             <thead><tr className="border-b border-border bg-bg3">
               <th className="text-left px-4 py-2.5 text-text3">Xodim</th>
+              <th className="text-left px-4 py-2.5 text-text3 w-[40%]">Campaignlar</th>
               <th className="text-left px-4 py-2.5 text-text3 w-36">Taqsimot %</th>
             </tr></thead>
             <tbody>
               {(campaignQ.data?.responsibles ?? []).map((r) => (
-                <CampaignPctRow key={r.id} row={r} onSave={saveCampaignPct} />
+                <CampaignPctRow key={r.id} row={r} onSave={saveCampaignPct}
+                  memberships={(membershipsQ.data?.memberships ?? []).filter(m => Number(m.responsible_id) === r.id)}
+                  availableCampaigns={Array.from(new Set([
+                    ...(campaignListQ.data?.campaigns ?? []).map(c => c.campaign_name),
+                    ...(campaignOptionsQ.data?.campaigns ?? []),
+                  ]))}
+                  adding={rowAddingCampaign === r.id}
+                  optionsLoading={campaignOptionsQ.isLoading}
+                  onToggleAdd={() => setRowAddingCampaign(rowAddingCampaign === r.id ? null : r.id)}
+                  onAddCampaign={(name) => addCampaignToOperator(r.id, name)} />
               ))}
-              {campaignQ.data?.responsibles.length === 0 && <tr><td colSpan={2} className="px-4 py-5 text-center text-[12px] text-text3">
+              {campaignQ.data?.responsibles.length === 0 && <tr><td colSpan={3} className="px-4 py-5 text-center text-[12px] text-text3">
                 Hali mas'ul qo'shilmagan. Yuqoridagi “Mas'ul qo'shish” tugmasini bosing.
               </td></tr>}
             </tbody>
             <tfoot><tr className="border-t-2 border-border bg-bg3">
-              <td className="px-4 py-2.5 font-semibold text-text">Jami</td>
+              <td colSpan={2} className="px-4 py-2.5 font-semibold text-text">Jami</td>
               <td className={`px-4 py-2.5 font-semibold ${campaignTotal === 100 ? "text-green-500" : "text-red-400"}`}>
                 {campaignTotal}% {campaignTotal === 100 ? "✓" : "(100% bo'lishi kerak)"}
               </td>
@@ -614,12 +646,19 @@ function TaqsimotRow({
   );
 }
 
-function CampaignPctRow({ row, onSave }: {
+function CampaignPctRow({ row, onSave, memberships, availableCampaigns, adding, optionsLoading, onToggleAdd, onAddCampaign }: {
   row: CampaignResponsible;
   onSave: (id: number, pct: number) => Promise<void>;
+  memberships: CampaignMembership[];
+  availableCampaigns: string[];
+  adding: boolean;
+  optionsLoading: boolean;
+  onToggleAdd: () => void;
+  onAddCampaign: (name: string) => void;
 }) {
   const [draft, setDraft] = useState(String(row.pct));
   useEffect(() => setDraft(String(row.pct)), [row.pct]);
+  const choices = availableCampaigns.filter(name => !memberships.some(m => m.campaign_name === name));
 
   function commit() {
     const pct = Number(draft);
@@ -627,17 +666,35 @@ function CampaignPctRow({ row, onSave }: {
       setDraft(String(row.pct));
       return;
     }
-    if (pct !== row.pct) onSave(row.id, pct);
+    if (row.attached && pct !== row.pct) onSave(row.id, pct);
   }
 
   return (
     <tr className="border-b border-border">
       <td className="px-4 py-2.5 text-text">{row.full_name}</td>
       <td className="px-4 py-2.5">
-        <input type="number" min={0} max={100} step={0.5} value={draft}
+        <div className="flex flex-wrap items-center gap-1.5">
+          {memberships.map(m => <span key={m.campaign_name} title={`${m.campaign_name} — ${m.pct}%`}
+            className="inline-block max-w-[220px] truncate rounded bg-blue/10 px-2 py-1 text-[11px] text-blue">
+            {m.campaign_name} · {m.pct}%
+          </span>)}
+          <button type="button" onClick={onToggleAdd}
+            className="inline-flex items-center gap-1 rounded border border-border px-2 py-1 text-[11px] text-text2 hover:text-blue">
+            <Plus className="w-3 h-3" /> Campaign qo‘shish
+          </button>
+        </div>
+        {adding && <select value="" onChange={(e) => onAddCampaign(e.target.value)}
+          className="mt-2 w-full max-w-[350px] rounded border border-border bg-bg px-2 py-1.5 text-[11px] text-text">
+          <option value="">{optionsLoading ? "Campaignlar yuklanmoqda..." : "Campaign tanlang"}</option>
+          {choices.map(name => <option key={name} value={name}>{name}</option>)}
+        </select>}
+      </td>
+      <td className="px-4 py-2.5">
+        <input type="number" min={0} max={100} step={0.5} value={draft} disabled={!row.attached}
           onChange={(e) => setDraft(e.target.value)} onBlur={commit}
           onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
-          className="w-20 px-2 py-1 rounded border border-border bg-bg text-text text-[12px] mono" /> %
+          title={row.attached ? "Ushbu campaign uchun foiz" : "Avval campaignni operatorga qo‘shing"}
+          className="w-20 px-2 py-1 rounded border border-border bg-bg text-text text-[12px] mono disabled:opacity-40" /> %
       </td>
     </tr>
   );

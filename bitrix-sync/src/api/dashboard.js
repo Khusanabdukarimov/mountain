@@ -1316,6 +1316,18 @@ router.get('/taqsimot-campaigns', async (_req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+router.get('/taqsimot-campaign-memberships', async (_req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT m.responsible_id, m.campaign_name, m.pct::float AS pct
+      FROM taqsimot_campaign_members m
+      JOIN responsibles r ON r.id = m.responsible_id
+      WHERE r.active = TRUE ORDER BY m.campaign_name
+    `);
+    res.json({ memberships: rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 router.get('/taqsimot-campaign-options', async (_req, res) => {
   try {
     const { rows } = await pool.query(`
@@ -1352,9 +1364,13 @@ router.get('/taqsimot-campaign', async (req, res) => {
     const [setting, responsibles] = await Promise.all([
       pool.query('SELECT active FROM taqsimot_campaign_settings WHERE campaign_name = $1', [name]),
       pool.query(`SELECT r.id, TRIM(COALESCE(r.name,'') || ' ' || COALESCE(r.last_name,'')) AS full_name,
-                         r.work_position, m.pct::float AS pct
-                  FROM taqsimot_campaign_members m JOIN responsibles r ON r.id = m.responsible_id
-                  WHERE m.campaign_name = $1 AND r.active = TRUE ORDER BY r.name`, [name]),
+                         r.work_position, COALESCE(m.pct, 0)::float AS pct,
+                         (m.responsible_id IS NOT NULL) AS attached
+                  FROM responsibles r LEFT JOIN taqsimot_campaign_members m
+                    ON m.responsible_id = r.id AND m.campaign_name = $1
+                  WHERE r.active = TRUE AND (m.responsible_id IS NOT NULL
+                    OR r.id IN (SELECT responsible_id FROM taqsimot_members))
+                  ORDER BY r.name`, [name]),
     ]);
     if (!setting.rows.length) return res.status(404).json({ error: 'Campaign topilmadi' });
     res.json({ campaign_name: name, active: setting.rows[0].active === true,
