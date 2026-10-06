@@ -101,7 +101,7 @@ export default function TaqsimotPage() {
     queryKey: ["taqsimot-campaign-stats"], queryFn: fetchCampaignStats, refetchInterval: 60_000,
   });
 
-  const rows = (data?.responsibles ?? []).filter((r) => r.taqsimot_enabled || parseFloat(String(r.taqsimot_pct ?? 0)) > 0);
+  const rows = (data?.responsibles ?? []).filter((r) => parseFloat(String(r.taqsimot_pct ?? 0)) > 0);
   const total = rows.reduce((s, r) => s + parseFloat(String(r.taqsimot_pct ?? 0)), 0);
   const totalRounded = Math.round(total * 10) / 10;
   const campaignTotal = Math.round((campaignQ.data?.responsibles ?? []).reduce((sum, r) => sum + r.pct, 0) * 10) / 10;
@@ -135,6 +135,8 @@ export default function TaqsimotPage() {
       await Promise.all([
         qc.invalidateQueries({ queryKey: ["taqsimot"] }),
         qc.invalidateQueries({ queryKey: ["taqsimot-stats"] }),
+        qc.invalidateQueries({ queryKey: ["taqsimot-campaign"] }),
+        qc.invalidateQueries({ queryKey: ["taqsimot-campaign-stats"] }),
       ]);
       if (result.warning) {
         toast.error("Diqqat", result.warning);
@@ -163,7 +165,7 @@ export default function TaqsimotPage() {
 
       {addOpen && (
         <AddResponsibleDialog
-          responsibles={(data?.responsibles ?? []).filter((r) => !r.taqsimot_enabled && !(parseFloat(String(r.taqsimot_pct ?? 0)) > 0))}
+          responsibles={(data?.responsibles ?? []).filter((r) => !(parseFloat(String(r.taqsimot_pct ?? 0)) > 0))}
           remaining={Math.max(0, 100 - totalRounded)}
           onClose={() => setAddOpen(false)}
           onSave={async (id, pct) => {
@@ -172,6 +174,8 @@ export default function TaqsimotPage() {
               await Promise.all([
                 qc.invalidateQueries({ queryKey: ["taqsimot"] }),
                 qc.invalidateQueries({ queryKey: ["taqsimot-stats"] }),
+                qc.invalidateQueries({ queryKey: ["taqsimot-campaign"] }),
+                qc.invalidateQueries({ queryKey: ["taqsimot-campaign-stats"] }),
               ]);
               toast.success("Saqlandi", "Mas'ul taqsimotga qo'shildi");
               setAddOpen(false);

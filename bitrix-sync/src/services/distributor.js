@@ -69,6 +69,7 @@ async function distributeLead(leadId, campaignName = null) {
         AND (l.source_id IS NULL OR l.source_id != 'UC_1WUFJB')
         ${streamFilter}
       WHERE r.${pctColumn} > 0
+        AND r.taqsimot_pct > 0
         AND r.active = TRUE
       GROUP BY r.id, r.name, r.${pctColumn}
       ORDER BY r.id

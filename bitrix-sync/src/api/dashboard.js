@@ -1287,7 +1287,7 @@ router.get('/taqsimot-campaign', async (_req, res) => {
       pool.query('SELECT active FROM taqsimot_campaign_settings WHERE campaign_name = $1', [CAMPAIGN_NAME]),
       pool.query(`SELECT id, TRIM(COALESCE(name,'') || ' ' || COALESCE(last_name,'')) AS full_name,
                          work_position, taqsimot_campaign_pct::float AS pct
-                  FROM responsibles WHERE active = TRUE ORDER BY name`),
+                  FROM responsibles WHERE active = TRUE AND taqsimot_pct > 0 ORDER BY name`),
     ]);
     res.json({ campaign_name: CAMPAIGN_NAME, active: setting.rows[0]?.active === true,
                responsibles: responsibles.rows });
@@ -1305,7 +1305,7 @@ router.put('/taqsimot-campaign/:id', async (req, res) => {
   }
   try {
     const { rowCount } = await pool.query(
-      'UPDATE responsibles SET taqsimot_campaign_pct = $1 WHERE id = $2 AND active = TRUE',
+      'UPDATE responsibles SET taqsimot_campaign_pct = $1 WHERE id = $2 AND active = TRUE AND taqsimot_pct > 0',
       [pct, id]
     );
     if (!rowCount) return res.status(404).json({ error: 'Active responsible not found' });
@@ -1323,7 +1323,7 @@ router.put('/taqsimot-campaign', async (req, res) => {
   try {
     if (req.body.active) {
       const { rows } = await pool.query(
-        'SELECT COALESCE(SUM(taqsimot_campaign_pct), 0)::float AS total FROM responsibles WHERE active = TRUE'
+        'SELECT COALESCE(SUM(taqsimot_campaign_pct), 0)::float AS total FROM responsibles WHERE active = TRUE AND taqsimot_pct > 0'
       );
       if (Math.abs(rows[0].total - 100) > 0.001) {
         return res.status(400).json({ error: `Campaign foizlari 100% bo'lishi kerak (hozir ${rows[0].total}%)` });
@@ -1402,7 +1402,7 @@ router.get('/taqsimot-campaign-stats', async (_req, res) => {
         AND (l.utm_campaign = $1 OR (NULLIF(l.utm_campaign, '') IS NULL AND EXISTS (
           SELECT 1 FROM facebook_leads fl WHERE fl.bitrix_lead_id = l.id AND fl.campaign_name = $1
         )))
-      WHERE r.taqsimot_campaign_pct > 0 AND r.active = TRUE
+      WHERE r.taqsimot_campaign_pct > 0 AND r.taqsimot_pct > 0 AND r.active = TRUE
       GROUP BY r.id, r.name, r.last_name, r.taqsimot_campaign_pct
       ORDER BY r.taqsimot_campaign_pct DESC
     `, [CAMPAIGN_NAME]);
