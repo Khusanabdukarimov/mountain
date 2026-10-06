@@ -88,8 +88,6 @@ export default function TaqsimotPage() {
   const qc    = useQueryClient();
   const toast = useToast();
   const [view, setView] = useState("general");
-  const [adding, setAdding] = useState(false);
-  const [newCampaign, setNewCampaign] = useState("");
   const [addResponsibleOpen, setAddResponsibleOpen] = useState(false);
   const [rowAddingCampaign, setRowAddingCampaign] = useState<number | null>(null);
   const campaignName = view === "general" ? "" : view;
@@ -115,7 +113,7 @@ export default function TaqsimotPage() {
   const campaignOptionsQ = useQuery({
     queryKey: ["taqsimot-campaign-options"],
     queryFn: () => apiGet<{ campaigns: string[] }>("/api/dashboard/taqsimot-campaign-options", {}, API_URL_CRM),
-    enabled: adding || rowAddingCampaign !== null,
+    enabled: rowAddingCampaign !== null,
   });
   const campaignQ = useQuery({ queryKey: ["taqsimot-campaign", campaignName], queryFn: () => fetchCampaignSetting(campaignName), enabled: !!campaignName });
   const candidatesQ = useQuery({
@@ -158,18 +156,6 @@ export default function TaqsimotPage() {
       await refreshDistribution();
       toast.success("Saqlandi", active ? "Campaign oqimi yoqildi" : "Campaign oqimi o'chirildi");
     } catch (e) { toast.error("Saqlashda xato", (e as Error).message); }
-  }
-
-  async function addCampaign() {
-    if (!newCampaign) return;
-    try {
-      await saveCampaignRequest("/api/dashboard/taqsimot-campaigns", { campaign_name: newCampaign }, "POST");
-      await qc.invalidateQueries({ queryKey: ["taqsimot-campaigns"] });
-      setView(newCampaign);
-      setNewCampaign("");
-      setAdding(false);
-      toast.success("Qo‘shildi", "Endi operatorlar foizini sozlang");
-    } catch (e) { toast.error("Qo‘shishda xato", (e as Error).message); }
   }
 
   async function addCampaignToOperator(id: number, name: string) {
@@ -260,23 +246,7 @@ export default function TaqsimotPage() {
               {c.campaign_name}{c.active ? " · Faol" : ""}
             </button>
           ))}
-          <button type="button" onClick={() => setAdding(!adding)}
-            className="inline-flex items-center gap-1 px-3 py-2 rounded-lg border border-border bg-bg2 text-text2 hover:text-text text-[12px]">
-            <Plus className="w-3.5 h-3.5" /> Campaign qo‘shish
-          </button>
         </div>
-
-        {adding && <div className="bg-bg2 border border-border rounded-xl p-4 flex flex-wrap gap-2 items-center">
-          <select value={newCampaign} onChange={(e) => setNewCampaign(e.target.value)}
-            className="min-w-[250px] max-w-full flex-1 bg-bg3 border border-border rounded-lg px-3 py-2 text-[12px] text-text">
-            <option value="">Campaign tanlang</option>
-            {(campaignOptionsQ.data?.campaigns ?? []).filter(name => !(campaignListQ.data?.campaigns ?? []).some(c => c.campaign_name === name))
-              .map(name => <option key={name} value={name}>{name}</option>)}
-          </select>
-          <Button onClick={addCampaign} disabled={!newCampaign}>Qo‘shish</Button>
-          {campaignOptionsQ.isLoading && <span className="text-[11px] text-text3">Yuklanmoqda...</span>}
-          {campaignOptionsQ.isError && <span className="text-[11px] text-red-400">Campaignlar yuklanmadi</span>}
-        </div>}
 
         {view !== "general" &&
         <div className="bg-bg2 border border-border rounded-xl shadow overflow-hidden">
