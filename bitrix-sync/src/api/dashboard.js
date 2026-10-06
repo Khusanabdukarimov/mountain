@@ -2,6 +2,7 @@ const { Router } = require('express');
 const pool = require('../db/pool');
 const fs = require('fs');
 const path = require('path');
+const { CAMPAIGN_NAME } = require('../services/distributionCampaign');
 
 const router = Router();
 
@@ -1209,7 +1210,7 @@ router.get('/taqsimot', async (_req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT r.id, TRIM(COALESCE(r.name,'') || ' ' || COALESCE(r.last_name,'')) AS full_name,
-              r.email, r.work_position, r.taqsimot_pct, r.taqsimot_enabled
+              r.email, r.work_position, r.taqsimot_pct, r.taqsimot_campaign_pct, r.taqsimot_enabled
        FROM responsibles r
        WHERE r.active = TRUE
        ORDER BY r.name`
@@ -1280,12 +1281,75 @@ router.put('/taqsimot/:id', async (req, res) => {
   }
 });
 
+router.get('/taqsimot-campaign', async (_req, res) => {
+  try {
+    const [setting, responsibles] = await Promise.all([
+      pool.query('SELECT active FROM taqsimot_campaign_settings WHERE campaign_name = $1', [CAMPAIGN_NAME]),
+      pool.query(`SELECT id, TRIM(COALESCE(name,'') || ' ' || COALESCE(last_name,'')) AS full_name,
+                         work_position, taqsimot_campaign_pct::float AS pct
+                  FROM responsibles WHERE active = TRUE ORDER BY name`),
+    ]);
+    res.json({ campaign_name: CAMPAIGN_NAME, active: setting.rows[0]?.active === true,
+               responsibles: responsibles.rows });
+  } catch (err) {
+    console.error('[dashboard/taqsimot-campaign GET]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/taqsimot-campaign/:id', async (req, res) => {
+  const id = Number(req.params.id);
+  const pct = Number(req.body?.pct);
+  if (!Number.isInteger(id) || id <= 0 || !Number.isFinite(pct) || pct < 0 || pct > 100) {
+    return res.status(400).json({ error: 'Invalid responsible id or percentage' });
+  }
+  try {
+    const { rowCount } = await pool.query(
+      'UPDATE responsibles SET taqsimot_campaign_pct = $1 WHERE id = $2 AND active = TRUE',
+      [pct, id]
+    );
+    if (!rowCount) return res.status(404).json({ error: 'Active responsible not found' });
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[dashboard/taqsimot-campaign PUT]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.put('/taqsimot-campaign', async (req, res) => {
+  if (typeof req.body?.active !== 'boolean') {
+    return res.status(400).json({ error: 'active must be boolean' });
+  }
+  try {
+    if (req.body.active) {
+      const { rows } = await pool.query(
+        'SELECT COALESCE(SUM(taqsimot_campaign_pct), 0)::float AS total FROM responsibles WHERE active = TRUE'
+      );
+      if (Math.abs(rows[0].total - 100) > 0.001) {
+        return res.status(400).json({ error: `Campaign foizlari 100% bo'lishi kerak (hozir ${rows[0].total}%)` });
+      }
+    }
+    await pool.query(
+      'UPDATE taqsimot_campaign_settings SET active = $1 WHERE campaign_name = $2',
+      [req.body.active, CAMPAIGN_NAME]
+    );
+    res.json({ ok: true, active: req.body.active });
+  } catch (err) {
+    console.error('[dashboard/taqsimot-campaign active PUT]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 /**
  * GET /api/dashboard/taqsimot-stats
  * Today's distribution accuracy per responsible.
  */
 router.get('/taqsimot-stats', async (_req, res) => {
   try {
+    const { rows: settings } = await pool.query(
+      'SELECT active FROM taqsimot_campaign_settings WHERE campaign_name = $1', [CAMPAIGN_NAME]
+    );
+    const campaignActive = settings[0]?.active === true;
     const { rows } = await pool.query(`
       SELECT
         r.id,
@@ -1304,13 +1368,47 @@ router.get('/taqsimot-stats', async (_req, res) => {
       LEFT JOIN leads l ON l.responsible_id = r.id
         AND l.date_create >= date_trunc('day', NOW() AT TIME ZONE 'Asia/Tashkent') AT TIME ZONE 'Asia/Tashkent'
         AND (l.source_id IS NULL OR l.source_id != 'UC_1WUFJB')
+        AND ($1::boolean = FALSE OR (
+          l.utm_campaign IS DISTINCT FROM $2
+          AND NOT (NULLIF(l.utm_campaign, '') IS NULL AND EXISTS (
+            SELECT 1 FROM facebook_leads fl WHERE fl.bitrix_lead_id = l.id AND fl.campaign_name = $2
+          ))
+        ))
       WHERE r.taqsimot_pct > 0 AND r.active = TRUE
       GROUP BY r.id, r.name, r.last_name, r.taqsimot_pct
       ORDER BY r.taqsimot_pct DESC
-    `);
+    `, [campaignActive, CAMPAIGN_NAME]);
     res.json({ stats: rows, date: new Date().toISOString() });
   } catch (err) {
     console.error('[dashboard/taqsimot-stats]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/taqsimot-campaign-stats', async (_req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT r.id,
+             TRIM(COALESCE(r.name,'') || ' ' || COALESCE(r.last_name,'')) AS full_name,
+             r.taqsimot_campaign_pct::float AS target_pct,
+             COUNT(l.id)::int AS today_count,
+             ROUND(COUNT(l.id)::numeric / NULLIF(SUM(COUNT(l.id)) OVER(), 0) * 100, 1)::float AS actual_pct,
+             ROUND(r.taqsimot_campaign_pct -
+                   COUNT(l.id)::numeric / NULLIF(SUM(COUNT(l.id)) OVER(), 0) * 100, 1)::float AS deficit_pct
+      FROM responsibles r
+      LEFT JOIN leads l ON l.responsible_id = r.id
+        AND l.date_create >= date_trunc('day', NOW() AT TIME ZONE 'Asia/Tashkent') AT TIME ZONE 'Asia/Tashkent'
+        AND (l.source_id IS NULL OR l.source_id != 'UC_1WUFJB')
+        AND (l.utm_campaign = $1 OR (NULLIF(l.utm_campaign, '') IS NULL AND EXISTS (
+          SELECT 1 FROM facebook_leads fl WHERE fl.bitrix_lead_id = l.id AND fl.campaign_name = $1
+        )))
+      WHERE r.taqsimot_campaign_pct > 0 AND r.active = TRUE
+      GROUP BY r.id, r.name, r.last_name, r.taqsimot_campaign_pct
+      ORDER BY r.taqsimot_campaign_pct DESC
+    `, [CAMPAIGN_NAME]);
+    res.json({ stats: rows, date: new Date().toISOString() });
+  } catch (err) {
+    console.error('[dashboard/taqsimot-campaign-stats]', err.message);
     res.status(500).json({ error: err.message });
   }
 });

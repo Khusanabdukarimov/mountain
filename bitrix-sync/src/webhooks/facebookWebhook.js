@@ -4,6 +4,7 @@ const { bitrixPost, fetchOne } = require('../services/bitrix');
 const { upsertLead } = require('../services/upsertLead');
 const { distributeLead } = require('../services/distributor');
 const { resolvePhone } = require('../services/resolvePhone');
+const { CAMPAIGN_NAME } = require('../services/distributionCampaign');
 
 // Facebook va Instagram Lead Ads uchun "Target" manba (UC_89FPH6)
 const SOURCE_TARGET = 'UC_89FPH6';
@@ -129,6 +130,12 @@ async function createBitrixLead(leadgenId, raw, fields) {
               'UPDATE facebook_leads SET bitrix_lead_id = $1 WHERE id = $2',
               [existingId, String(leadgenId)]
             );
+            if (raw.campaign_name === CAMPAIGN_NAME) {
+              const { rows: settings } = await pool.query(
+                'SELECT active FROM taqsimot_campaign_settings WHERE campaign_name = $1', [CAMPAIGN_NAME]
+              );
+              if (settings[0]?.active) await distributeLead(existingId, CAMPAIGN_NAME);
+            }
             console.log(`[facebook] UTM patched onto existing lead #${existingId} (native-connector created) for FB lead ${leadgenId}`);
             return;
           }
@@ -176,7 +183,7 @@ async function createBitrixLead(leadgenId, raw, fields) {
           rawLead.UTM_CAMPAIGN = raw.campaign_name;
         }
         await upsertLead(rawLead);
-        const assigned = await distributeLead(newLeadId);
+        const assigned = await distributeLead(newLeadId, raw.campaign_name);
         if (assigned) {
           console.log(`[facebook] Lead #${newLeadId} distributed to responsible #${assigned}`);
         } else {

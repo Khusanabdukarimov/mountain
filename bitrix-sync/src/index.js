@@ -83,6 +83,20 @@ Promise.all([
       WHERE taqsimot_enabled IS NULL;
     ALTER TABLE responsibles ALTER COLUMN taqsimot_enabled SET DEFAULT FALSE;
     ALTER TABLE responsibles ALTER COLUMN taqsimot_enabled SET NOT NULL;
+    ALTER TABLE responsibles ADD COLUMN IF NOT EXISTS taqsimot_campaign_pct NUMERIC(5,2) NOT NULL DEFAULT 0;
+    CREATE TABLE IF NOT EXISTS taqsimot_campaign_settings (
+      campaign_name TEXT PRIMARY KEY,
+      active BOOLEAN NOT NULL DEFAULT FALSE
+    );
+    INSERT INTO taqsimot_campaign_settings (campaign_name, active)
+      VALUES ('AN-JiDDi || TOF || Broad || ABO || 30$ || UZB', FALSE)
+      ON CONFLICT (campaign_name) DO NOTHING;
+    CREATE TABLE IF NOT EXISTS taqsimot_assignments (
+      lead_id BIGINT PRIMARY KEY,
+      responsible_id BIGINT NOT NULL,
+      campaign_name TEXT,
+      assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
   `).catch(err => console.error('[startup] taqsimot membership migration failed:', err.message)),
   pool.query(`
     ALTER TABLE leads ADD COLUMN IF NOT EXISTS uf_amo_date TIMESTAMPTZ;

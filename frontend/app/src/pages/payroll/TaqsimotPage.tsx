@@ -28,6 +28,9 @@ type StatRow = {
   deficit_pct: number | null;
 };
 
+type CampaignResponsible = { id: number; full_name: string; work_position: string | null; pct: number };
+type CampaignSetting = { campaign_name: string; active: boolean; responsibles: CampaignResponsible[] };
+
 // ── API helpers ───────────────────────────────────────────────────────────────
 
 function fetchTaqsimot() {
@@ -36,6 +39,24 @@ function fetchTaqsimot() {
 
 function fetchStats() {
   return apiGet<{ stats: StatRow[]; date: string }>("/api/dashboard/taqsimot-stats", {}, API_URL_CRM);
+}
+
+function fetchCampaignSetting() {
+  return apiGet<CampaignSetting>("/api/dashboard/taqsimot-campaign", {}, API_URL_CRM);
+}
+
+function fetchCampaignStats() {
+  return apiGet<{ stats: StatRow[]; date: string }>("/api/dashboard/taqsimot-campaign-stats", {}, API_URL_CRM);
+}
+
+async function saveCampaignRequest(path: string, body: object) {
+  const res = await authedFetch(path, {
+    method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+  }, API_URL_CRM);
+  if (!res.ok) {
+    const payload = await res.json().catch(() => ({}));
+    throw new Error(payload.error || `${res.status} ${res.statusText}`);
+  }
 }
 
 async function saveTaqsimot(id: number, pct: number) {
@@ -75,10 +96,38 @@ export default function TaqsimotPage() {
     queryFn: fetchStats,
     refetchInterval: 60_000,
   });
+  const campaignQ = useQuery({ queryKey: ["taqsimot-campaign"], queryFn: fetchCampaignSetting });
+  const campaignStatsQ = useQuery({
+    queryKey: ["taqsimot-campaign-stats"], queryFn: fetchCampaignStats, refetchInterval: 60_000,
+  });
 
   const rows = (data?.responsibles ?? []).filter((r) => r.taqsimot_enabled || parseFloat(String(r.taqsimot_pct ?? 0)) > 0);
   const total = rows.reduce((s, r) => s + parseFloat(String(r.taqsimot_pct ?? 0)), 0);
   const totalRounded = Math.round(total * 10) / 10;
+  const campaignTotal = Math.round((campaignQ.data?.responsibles ?? []).reduce((sum, r) => sum + r.pct, 0) * 10) / 10;
+
+  async function refreshDistribution() {
+    await Promise.all([
+      qc.invalidateQueries({ queryKey: ["taqsimot-campaign"] }),
+      qc.invalidateQueries({ queryKey: ["taqsimot-campaign-stats"] }),
+      qc.invalidateQueries({ queryKey: ["taqsimot-stats"] }),
+    ]);
+  }
+
+  async function saveCampaignPct(id: number, pct: number) {
+    try {
+      await saveCampaignRequest(`/api/dashboard/taqsimot-campaign/${id}`, { pct });
+      await refreshDistribution();
+    } catch (e) { toast.error("Saqlashda xato", (e as Error).message); }
+  }
+
+  async function setCampaignActive(active: boolean) {
+    try {
+      await saveCampaignRequest("/api/dashboard/taqsimot-campaign", { active });
+      await refreshDistribution();
+      toast.success("Saqlandi", active ? "Campaign oqimi yoqildi" : "Campaign oqimi o'chirildi");
+    } catch (e) { toast.error("Saqlashda xato", (e as Error).message); }
+  }
 
   async function handleSave(id: number, pct: number) {
     try {
@@ -105,7 +154,7 @@ export default function TaqsimotPage() {
             <Button variant="primary" onClick={() => setAddOpen(true)}>
               <Plus className="w-3.5 h-3.5" /> Mas'ul qo'shish
             </Button>
-            <Button onClick={() => { refetch(); statsQ.refetch(); }}>
+            <Button onClick={() => { refetch(); statsQ.refetch(); campaignQ.refetch(); campaignStatsQ.refetch(); }}>
               <RefreshCw className="w-3.5 h-3.5" /> Yangilash
             </Button>
           </>
@@ -135,10 +184,55 @@ export default function TaqsimotPage() {
 
       <div className="flex-1 overflow-y-auto px-3 sm:px-[22px] py-3 sm:py-[18px] bg-bg space-y-5">
 
+        <div className="bg-bg2 border border-border rounded-xl shadow overflow-hidden">
+          <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-4">
+            <div>
+              <div className="text-[12px] font-semibold text-text">Campaign bo'yicha alohida taqsimot</div>
+              <div className="text-[11px] text-text3 mt-0.5 break-all">{campaignQ.data?.campaign_name ?? "AN-JiDDi || TOF || Broad || ABO || 30$ || UZB"}</div>
+            </div>
+            <label className="flex items-center gap-2 text-[12px] text-text shrink-0">
+              <input type="checkbox" checked={campaignQ.data?.active ?? false}
+                disabled={!campaignQ.data || (!campaignQ.data.active && campaignTotal !== 100)}
+                onChange={(e) => setCampaignActive(e.target.checked)} />
+              Faol
+            </label>
+          </div>
+          <div className="px-4 py-2.5 text-[11px] text-text3">
+            Faol bo'lsa, ushbu campaign leadlari shu foizlar bilan taqsimlanadi. Umumiy lead oqimiga boshqa campaignlar kiradi.
+          </div>
+          <table className="w-full text-[12.5px]">
+            <thead><tr className="border-b border-border bg-bg3">
+              <th className="text-left px-4 py-2.5 text-text3">Xodim</th>
+              <th className="text-left px-4 py-2.5 text-text3 w-36">Taqsimot %</th>
+            </tr></thead>
+            <tbody>
+              {(campaignQ.data?.responsibles ?? []).map((r) => (
+                <CampaignPctRow key={r.id} row={r} onSave={saveCampaignPct} />
+              ))}
+            </tbody>
+            <tfoot><tr className="border-t-2 border-border bg-bg3">
+              <td className="px-4 py-2.5 font-semibold text-text">Jami</td>
+              <td className={`px-4 py-2.5 font-semibold ${campaignTotal === 100 ? "text-green-500" : "text-red-400"}`}>
+                {campaignTotal}% {campaignTotal === 100 ? "✓" : "(100% bo'lishi kerak)"}
+              </td>
+            </tr></tfoot>
+          </table>
+          {campaignQ.data?.active && (
+            <div className="border-t border-border px-4 py-3">
+              <div className="text-[12px] font-semibold text-text mb-2">Bugungi campaign leadlari</div>
+              <div className="flex flex-wrap gap-4 text-[11px] text-text2">
+                {(campaignStatsQ.data?.stats ?? []).map((s) => (
+                  <span key={s.id}>{s.full_name}: <strong className="text-text">{s.today_count}</strong> / {s.target_pct}%</span>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* ── Settings table ─────────────────────────────────────────── */}
         <div className="bg-bg2 border border-border rounded-xl shadow overflow-hidden">
           <div className="px-4 py-3 border-b border-border">
-            <div className="text-[12px] font-semibold text-text">Taqsimot sozlamalari</div>
+            <div className="text-[12px] font-semibold text-text">Umumiy lead taqsimoti</div>
             <div className="text-[11px] text-text3 mt-0.5">
               Foizni o'zgartirish uchun katakni bosing
             </div>
@@ -201,7 +295,7 @@ export default function TaqsimotPage() {
         <div className="bg-bg2 border border-border rounded-xl shadow overflow-hidden">
           <div className="px-4 py-3 border-b border-border flex items-center justify-between">
             <div>
-              <div className="text-[12px] font-semibold text-text">Bugungi taqsimot</div>
+              <div className="text-[12px] font-semibold text-text">Bugungi umumiy lead taqsimoti</div>
               <div className="text-[11px] text-text3 mt-0.5">
                 Haqiqiy vs maqsad foiz (bugun kelgan lidlar)
               </div>
@@ -448,6 +542,35 @@ function TaqsimotRow({
             {hasVal ? `${pct}%` : "—"}
           </button>
         )}
+      </td>
+    </tr>
+  );
+}
+
+function CampaignPctRow({ row, onSave }: {
+  row: CampaignResponsible;
+  onSave: (id: number, pct: number) => Promise<void>;
+}) {
+  const [draft, setDraft] = useState(String(row.pct));
+  useEffect(() => setDraft(String(row.pct)), [row.pct]);
+
+  function commit() {
+    const pct = Number(draft);
+    if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
+      setDraft(String(row.pct));
+      return;
+    }
+    if (pct !== row.pct) onSave(row.id, pct);
+  }
+
+  return (
+    <tr className="border-b border-border">
+      <td className="px-4 py-2.5 text-text">{row.full_name}</td>
+      <td className="px-4 py-2.5">
+        <input type="number" min={0} max={100} step={0.5} value={draft}
+          onChange={(e) => setDraft(e.target.value)} onBlur={commit}
+          onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+          className="w-20 px-2 py-1 rounded border border-border bg-bg text-text text-[12px] mono" /> %
       </td>
     </tr>
   );
