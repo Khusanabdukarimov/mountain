@@ -113,8 +113,10 @@ export default function TaqsimotPage() {
   });
   const campaignQ = useQuery({ queryKey: ["taqsimot-campaign", campaignName], queryFn: () => fetchCampaignSetting(campaignName), enabled: !!campaignName });
   const candidatesQ = useQuery({
-    queryKey: ["taqsimot-candidates"],
-    queryFn: () => apiGet<{ responsibles: Responsible[] }>("/api/dashboard/taqsimot-candidates", {}, API_URL_CRM),
+    queryKey: ["taqsimot-candidates", campaignName],
+    queryFn: () => apiGet<{ responsibles: Responsible[] }>(
+      `/api/dashboard/taqsimot-candidates${campaignName ? `?campaign_name=${encodeURIComponent(campaignName)}` : ""}`,
+      {}, API_URL_CRM),
     enabled: addResponsibleOpen,
   });
   const campaignStatsQ = useQuery({
@@ -165,17 +167,17 @@ export default function TaqsimotPage() {
 
   async function addResponsible(id: number, pct: number) {
     try {
-      await addTaqsimotResponsible(id, view === "general" ? pct : 0);
-      if (view !== "general" && pct > 0) {
-        await saveCampaignRequest(`/api/dashboard/taqsimot-campaign/${id}`, { campaign_name: campaignName, pct });
-      }
+      if (view === "general") await addTaqsimotResponsible(id, pct);
+      else await saveCampaignRequest("/api/dashboard/taqsimot-campaign-members", {
+        campaign_name: campaignName, responsible_id: id, pct,
+      }, "POST");
       await Promise.all([
         qc.invalidateQueries({ queryKey: ["taqsimot"] }),
         qc.invalidateQueries({ queryKey: ["taqsimot-candidates"] }),
         refreshDistribution(),
       ]);
       setAddResponsibleOpen(false);
-      toast.success("Qo‘shildi", "Mas’ul taqsimotga qo‘shildi");
+      toast.success("Qo‘shildi", view === "general" ? "Mas’ul umumiy oqimga qo‘shildi" : "Mas’ul shu campaignga qo‘shildi");
     } catch (e) { toast.error("Qo‘shishda xato", (e as Error).message); }
   }
 
@@ -269,7 +271,7 @@ export default function TaqsimotPage() {
             </label>
           </div>
           <div className="px-4 py-2.5 text-[11px] text-text3">
-            Faol bo'lsa, ushbu campaign leadlari shu foizlar bilan taqsimlanadi. Umumiy lead oqimiga boshqa campaignlar kiradi.
+            Bir mas'ulni bir nechta campaignga qo'shish mumkin. Har bir campaignning foizi alohida 100% bo'ladi; umumiy lead foiziga ta'sir qilmaydi.
           </div>
           <table className="w-full text-[12.5px]">
             <thead><tr className="border-b border-border bg-bg3">
@@ -280,6 +282,9 @@ export default function TaqsimotPage() {
               {(campaignQ.data?.responsibles ?? []).map((r) => (
                 <CampaignPctRow key={r.id} row={r} onSave={saveCampaignPct} />
               ))}
+              {campaignQ.data?.responsibles.length === 0 && <tr><td colSpan={2} className="px-4 py-5 text-center text-[12px] text-text3">
+                Hali mas'ul qo'shilmagan. Yuqoridagi “Mas'ul qo'shish” tugmasini bosing.
+              </td></tr>}
             </tbody>
             <tfoot><tr className="border-t-2 border-border bg-bg3">
               <td className="px-4 py-2.5 font-semibold text-text">Jami</td>

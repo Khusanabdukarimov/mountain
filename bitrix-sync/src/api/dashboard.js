@@ -1222,15 +1222,21 @@ router.get('/taqsimot', async (_req, res) => {
   }
 });
 
-router.get('/taqsimot-candidates', async (_req, res) => {
+router.get('/taqsimot-candidates', async (req, res) => {
+  const name = typeof req.query.campaign_name === 'string' ? req.query.campaign_name : '';
   try {
     const { rows } = await pool.query(`
       SELECT r.id, TRIM(COALESCE(r.name,'') || ' ' || COALESCE(r.last_name,'')) AS full_name,
              r.email, r.work_position, r.taqsimot_pct, r.taqsimot_enabled
       FROM responsibles r WHERE r.active = TRUE
-        AND NOT EXISTS (SELECT 1 FROM taqsimot_members m WHERE m.responsible_id = r.id)
+        AND NOT EXISTS (
+          SELECT 1 FROM taqsimot_members m WHERE $1 = '' AND m.responsible_id = r.id
+          UNION ALL
+          SELECT 1 FROM taqsimot_campaign_members m
+          WHERE $1 <> '' AND m.campaign_name = $1 AND m.responsible_id = r.id
+        )
       ORDER BY r.name
-    `);
+    `, [name]);
     res.json({ responsibles: rows });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -1345,11 +1351,10 @@ router.get('/taqsimot-campaign', async (req, res) => {
   try {
     const [setting, responsibles] = await Promise.all([
       pool.query('SELECT active FROM taqsimot_campaign_settings WHERE campaign_name = $1', [name]),
-      pool.query(`SELECT id, TRIM(COALESCE(name,'') || ' ' || COALESCE(last_name,'')) AS full_name,
-                         work_position, COALESCE(m.pct, 0)::float AS pct
-                  FROM responsibles r LEFT JOIN taqsimot_campaign_members m
-                    ON m.responsible_id = r.id AND m.campaign_name = $1
-                  WHERE r.active = TRUE AND r.id IN (SELECT responsible_id FROM taqsimot_members) ORDER BY r.name`, [name]),
+      pool.query(`SELECT r.id, TRIM(COALESCE(r.name,'') || ' ' || COALESCE(r.last_name,'')) AS full_name,
+                         r.work_position, m.pct::float AS pct
+                  FROM taqsimot_campaign_members m JOIN responsibles r ON r.id = m.responsible_id
+                  WHERE m.campaign_name = $1 AND r.active = TRUE ORDER BY r.name`, [name]),
     ]);
     if (!setting.rows.length) return res.status(404).json({ error: 'Campaign topilmadi' });
     res.json({ campaign_name: name, active: setting.rows[0].active === true,
@@ -1360,21 +1365,38 @@ router.get('/taqsimot-campaign', async (req, res) => {
   }
 });
 
+router.post('/taqsimot-campaign-members', async (req, res) => {
+  const name = typeof req.body?.campaign_name === 'string' ? req.body.campaign_name : '';
+  const id = Number(req.body?.responsible_id);
+  const pct = Number(req.body?.pct);
+  if (!name || !Number.isInteger(id) || id <= 0 || !Number.isFinite(pct) || pct < 0 || pct > 100) {
+    return res.status(400).json({ error: 'Campaign, mas’ul yoki foiz noto‘g‘ri' });
+  }
+  try {
+    const { rows } = await pool.query(`
+      INSERT INTO taqsimot_campaign_members (campaign_name, responsible_id, pct)
+      SELECT $1, r.id, $3 FROM responsibles r
+      WHERE r.id = $2 AND r.active = TRUE
+        AND EXISTS (SELECT 1 FROM taqsimot_campaign_settings WHERE campaign_name = $1)
+      ON CONFLICT DO NOTHING RETURNING responsible_id
+    `, [name, id, pct]);
+    if (!rows.length) return res.status(409).json({ error: 'Mas’ul topilmadi yoki campaignga allaqachon qo‘shilgan' });
+    res.status(201).json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 router.put('/taqsimot-campaign/:id', async (req, res) => {
   const id = Number(req.params.id);
   const pct = Number(req.body?.pct);
   if (!Number.isInteger(id) || id <= 0 || !Number.isFinite(pct) || pct < 0 || pct > 100) {
     return res.status(400).json({ error: 'Invalid responsible id or percentage' });
   }
-  const { rows: members } = await pool.query('SELECT 1 FROM taqsimot_members WHERE responsible_id = $1', [id]);
-  if (!members.length) return res.status(403).json({ error: 'Mas’ul taqsimotda yo‘q' });
   const name = String(req.body?.campaign_name || CAMPAIGN_NAME);
   try {
     const { rowCount } = await pool.query(`
-      INSERT INTO taqsimot_campaign_members (campaign_name, responsible_id, pct)
-      SELECT $1, $2, $3 WHERE EXISTS (SELECT 1 FROM taqsimot_campaign_settings WHERE campaign_name = $1)
-        AND EXISTS (SELECT 1 FROM responsibles WHERE id = $2 AND active = TRUE)
-      ON CONFLICT (campaign_name, responsible_id) DO UPDATE SET pct = EXCLUDED.pct
+      UPDATE taqsimot_campaign_members m SET pct = $3
+      FROM responsibles r WHERE m.campaign_name = $1 AND m.responsible_id = $2
+        AND r.id = m.responsible_id AND r.active = TRUE
     `, [name, id, pct]);
     if (!rowCount) return res.status(404).json({ error: 'Campaign yoki operator topilmadi' });
     res.json({ ok: true });
@@ -1394,7 +1416,7 @@ router.put('/taqsimot-campaign', async (req, res) => {
       const { rows } = await pool.query(
         `SELECT COALESCE(SUM(m.pct), 0)::float AS total FROM taqsimot_campaign_members m
          JOIN responsibles r ON r.id = m.responsible_id
-         WHERE m.campaign_name = $1 AND r.active = TRUE AND r.id IN (SELECT responsible_id FROM taqsimot_members)`, [name]
+         WHERE m.campaign_name = $1 AND r.active = TRUE`, [name]
       );
       if (Math.abs(rows[0].total - 100) > 0.001) {
         return res.status(400).json({ error: `Campaign foizlari 100% bo'lishi kerak (hozir ${rows[0].total}%)` });
@@ -1478,7 +1500,6 @@ router.get('/taqsimot-campaign-stats', async (req, res) => {
           SELECT 1 FROM facebook_leads fl WHERE fl.bitrix_lead_id = l.id AND fl.campaign_name = $1
         )))
       WHERE m.pct > 0 AND r.active = TRUE
-        AND r.id IN (SELECT responsible_id FROM taqsimot_members)
       GROUP BY r.id, r.name, r.last_name, m.pct
       ORDER BY m.pct DESC
     `, [name]);

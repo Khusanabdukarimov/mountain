@@ -69,7 +69,7 @@ async function distributeLead(leadId, campaignName = null) {
         ${streamFilter}
       WHERE ${streamCampaign ? 'COALESCE(m.pct, 0)' : 'r.taqsimot_pct'} > 0
         ${streamCampaign ? '' : 'AND r.taqsimot_pct > 0'}
-        AND r.id IN (SELECT responsible_id FROM taqsimot_members)
+        ${streamCampaign ? '' : 'AND r.id IN (SELECT responsible_id FROM taqsimot_members)'}
         AND r.active = TRUE
       GROUP BY r.id, r.name${streamCampaign ? ', m.pct' : ', r.taqsimot_pct'}
       ORDER BY r.id
