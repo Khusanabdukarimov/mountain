@@ -955,12 +955,18 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
             _camp_in = f"IN ({', '.join(_ck)})"
             _camp_filter_a = f"AND fl_a.campaign_name {_camp_in}"
             _camp_filter_b = f"AND fl_b.campaign_name {_camp_in}"
+            # Path C: the campaign on the deal card itself. Needed for deals
+            # with no lead and no phone to match through facebook_leads (e.g. a
+            # returning customer's new deal) — Paths A/B can never see those.
+            _camp_filter_c = f"d.utm_campaign {_camp_in}"
         elif targ_keys:
             _camp_filter_a = "AND FALSE"
             _camp_filter_b = "AND FALSE"
+            _camp_filter_c = "FALSE"
         else:
             _camp_filter_a = ""
             _camp_filter_b = ""
+            _camp_filter_c = "FALSE"
 
         if targ_keys:
             # Targetolog filtered: only FB-attributed deals for selected campaigns
@@ -990,6 +996,7 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
                       WHERE dp.deal_id = d.id
                         {_camp_filter_b}
                     )
+                    OR {_camp_filter_c}
                   )
             """)
             payment_sql = _text(f"""
@@ -1022,6 +1029,7 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
                       WHERE dp.deal_id = d.id
                         {_camp_filter_b}
                     )
+                    OR {_camp_filter_c}
                   )
                 GROUP BY 1
             """)
