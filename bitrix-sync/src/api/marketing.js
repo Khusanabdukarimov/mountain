@@ -82,12 +82,18 @@ router.get('/kunlik', async (req, res) => {
     params.push(targetologCampaigns);
     return `AND ${alias}utm_campaign = ANY($${params.length}::text[])`;
   }
-  // Appends a subquery matching deals to leads whose utm_campaign belongs to the targetolog.
-  // Deals created directly without a lead_id are not attributable to a campaign and are excluded.
+  // Matches deals whose campaign belongs to the targetolog. The campaign is the
+  // linked lead's utm_campaign; a deal with no lead (or a lead without a
+  // campaign), e.g. a returning customer's new deal, falls back to the UTM
+  // campaign on the deal card itself. A deal with neither is not attributable
+  // and is excluded.
   function dealTargFilter(params, alias = '') {
     if (!hasTargetolog) return '';
     params.push(targetologCampaigns);
-    return `AND ${alias}lead_id IN (SELECT id FROM leads WHERE utm_campaign = ANY($${params.length}::text[]))`;
+    return `AND COALESCE(
+      NULLIF((SELECT utm_campaign FROM leads WHERE id = ${alias}lead_id), ''),
+      NULLIF(${alias}utm_campaign, '')
+    ) = ANY($${params.length}::text[])`;
   }
 
   const METRICS = ['leads','qual_leads','meetings_set','meetings','deals','deals_sum','sales_count','sales_sum','cancelled'];

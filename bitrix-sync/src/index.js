@@ -136,6 +136,10 @@ Promise.all([
     -- ENTERED that stage in a period, which the current stage_id alone cannot
     -- answer once a deal has moved on to Sotuv bo'ldi.
     ALTER TABLE deals ADD COLUMN IF NOT EXISTS uf_kelishuv_date TIMESTAMPTZ;
+    -- The deal card's own UTM_CAMPAIGN. A deal created without a lead (e.g. a
+    -- returning customer's new deal) has no lead to inherit the campaign from,
+    -- so Kunlik attributes it to a targetolog through this column.
+    ALTER TABLE deals ADD COLUMN IF NOT EXISTS utm_campaign TEXT;
     CREATE INDEX IF NOT EXISTS deals_date_modify_idx      ON deals(date_modify);
     CREATE INDEX IF NOT EXISTS deals_uf_sale_date_idx     ON deals(uf_sale_date);
     CREATE INDEX IF NOT EXISTS deals_uf_bp_sale_date_idx  ON deals(uf_bp_sale_date);

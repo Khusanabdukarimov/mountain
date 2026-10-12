@@ -83,6 +83,7 @@ CREATE TABLE IF NOT EXISTS deals (
   currency_id     TEXT,
   source_id       TEXT,
   utm_source      TEXT,
+  utm_campaign    TEXT,
   title           TEXT,
   date_create     TIMESTAMPTZ,
   date_modify     TIMESTAMPTZ,
