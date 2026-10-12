@@ -1922,8 +1922,12 @@ async function syncCreativeNames() {
     // (e.g. dynamic/Advantage+ creatives with no effective_object_story_id).
     // Active ads with no lead yet (meta_active_creatives) are included so their
     // thumbnail / post link resolve as soon as they appear in the Creative tab.
+    // Past never-cached ads, ads still missing a thumbnail go first, then the
+    // longest-unsynced: every cached row is older than 1h at any moment, and a
+    // rate-limited cycle can fail, so without an order the same 50 could be
+    // picked repeatedly while other rows' signed thumbnail URLs expire.
     const { rows: adRows } = await pool.query(`
-      SELECT DISTINCT a.ad_id, (cc.ad_id IS NULL) AS is_new
+      SELECT a.ad_id, (cc.ad_id IS NULL) AS is_new
       FROM (
         SELECT ad_id FROM facebook_leads WHERE ad_id IS NOT NULL AND ad_id != ''
         UNION
@@ -1931,7 +1935,7 @@ async function syncCreativeNames() {
       ) a
       LEFT JOIN meta_creative_cache cc ON cc.ad_id = a.ad_id
       WHERE cc.ad_id IS NULL OR cc.synced_at < NOW() - INTERVAL '1 hour'
-      ORDER BY is_new DESC
+      ORDER BY is_new DESC, (cc.thumbnail_url IS NULL) DESC, cc.synced_at ASC
       LIMIT 50
     `);
     if (!adRows.length) return;
@@ -1989,7 +1993,7 @@ async function syncCreativeNames() {
     if (igIds.length) {
       try {
         const res = await axios.get(`${BASE}/`, {
-          params: { ids: igIds.join(','), fields: 'permalink', access_token: tok },
+          params: { ids: igIds.join(','), fields: 'permalink,thumbnail_url', access_token: tok },
           timeout: 15000,
         });
         igData = res.data || {};
@@ -2004,7 +2008,7 @@ async function syncCreativeNames() {
     if (videoIds.length) {
       try {
         const res = await axios.get(`${BASE}/`, {
-          params: { ids: videoIds.join(','), fields: 'title,source,permalink_url', access_token: tok },
+          params: { ids: videoIds.join(','), fields: 'title,source,permalink_url,picture', access_token: tok },
           timeout: 15000,
         });
         videosData = res.data || {};
@@ -2020,6 +2024,11 @@ async function syncCreativeNames() {
       const videoSourceUrl = vid?.source || null;
 
       const instagramPostUrl = s.igMediaId ? (igData[s.igMediaId]?.permalink || null) : null;
+      // The batched ad lookup sometimes returns no creative.thumbnail_url for
+      // Instagram video ads; the video's own picture / the IG media thumbnail
+      // are the same frame, so fall back to them instead of showing no image.
+      const thumbnailUrl = s.thumbnailUrl || vid?.picture
+        || (s.igMediaId ? (igData[s.igMediaId]?.thumbnail_url || null) : null);
       const facebookPostUrl  = buildPostUrl(s.storyId)
         || (vid?.permalink_url ? (vid.permalink_url.startsWith('http') ? vid.permalink_url : `https://www.facebook.com${vid.permalink_url}`) : null);
 
@@ -2051,7 +2060,7 @@ async function syncCreativeNames() {
           effective_instagram_media_id = EXCLUDED.effective_instagram_media_id,
           synced_at                    = NOW()
       `, [
-        s.ad_id, s.creativeId, s.name, s.video_id, videoTitle, postUrl, s.thumbnailUrl, s.adsManagerUrl,
+        s.ad_id, s.creativeId, s.name, s.video_id, videoTitle, postUrl, thumbnailUrl, s.adsManagerUrl,
         platform, facebookPostUrl, instagramPostUrl, videoSourceUrl,
         s.storyId, s.igMediaId,
       ]).catch(() => {});
@@ -2078,11 +2087,16 @@ async function syncCreativeNames() {
 // query in syncCreativeNames already prioritizes never-cached ad_ids too).
 async function resyncMissingPostUrls() {
   try {
+    // A missing thumbnail is retried much sooner than a missing post_url: Meta
+    // often has no thumbnail on the first fetch of a brand-new ad and returns
+    // it a little later, while a missing post_url is usually permanent.
     await pool.query(`
       UPDATE meta_creative_cache
       SET synced_at = '2000-01-01'
-      WHERE (post_url IS NULL OR thumbnail_url IS NULL) AND creative_id IS NOT NULL
-        AND synced_at < NOW() - INTERVAL '6 hours'
+      WHERE creative_id IS NOT NULL AND (
+        (thumbnail_url IS NULL AND synced_at < NOW() - INTERVAL '30 minutes')
+        OR (post_url IS NULL AND synced_at < NOW() - INTERVAL '6 hours')
+      )
     `);
   } catch (_) {}
 }
