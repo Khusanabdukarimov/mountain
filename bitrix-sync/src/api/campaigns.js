@@ -473,6 +473,25 @@ router.get('/form-stats', async (req, res) => {
           ${from ? `AND COALESCE(d.uf_bp_sale_date, d.date_create) >= $1::date` : ''}
           ${to   ? `AND COALESCE(d.uf_bp_sale_date, d.date_create) <= ${ from ? '$2' : '$1' }::date` : ''}
         GROUP BY fl.campaign_name
+        UNION ALL
+        -- Path C: the deal card's own UTM_CAMPAIGN, for deals Paths A and B cannot
+        -- see — no lead (or a lead with no campaign) and no phone to match a Meta
+        -- form lead, e.g. a returning customer's new deal. NOT EXISTS mirrors
+        -- Path B so a deal is never counted twice.
+        SELECT d.utm_campaign AS campaign_name, COUNT(DISTINCT d.id) AS cnt
+        FROM deals d
+        LEFT JOIN leads le ON le.id = d.lead_id
+        JOIN stages ds ON ds.id = d.stage_id AND ds.is_won = true
+        WHERE NULLIF(d.utm_campaign, '') IS NOT NULL
+          AND (d.lead_id IS NULL OR COALESCE(le.utm_campaign, '') = '')
+          AND NOT EXISTS (
+            SELECT 1 FROM deal_phones dp
+            JOIN facebook_leads fl ON fl.phone_norm = dp.phone_norm
+            WHERE dp.deal_id = d.id AND d.lead_id IS NULL AND fl.campaign_name IS NOT NULL
+          )
+          ${from ? `AND COALESCE(d.uf_bp_sale_date, d.date_create) >= $1::date` : ''}
+          ${to   ? `AND COALESCE(d.uf_bp_sale_date, d.date_create) <= ${ from ? '$2' : '$1' }::date` : ''}
+        GROUP BY d.utm_campaign
       ),
       sotuv_by_campaign AS (
         SELECT campaign_name, SUM(cnt)::int AS sotuv_boldi

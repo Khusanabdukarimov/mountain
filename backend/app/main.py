@@ -1126,6 +1126,8 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
             WHERE COALESCE(d.uf_bp_sale_date, d.uf_payment_date, d.date_create)::date BETWEEN :since AND :until
               AND d.source_id = :src
               {resp_deal}
+              -- a deal whose own card carries a campaign is attributed (Path C), not unmatched
+              AND NULLIF(d.utm_campaign, '') IS NULL
               AND NOT EXISTS (
                 SELECT 1 FROM leads le
                 JOIN lead_phones lp ON lp.lead_id = le.id
@@ -1155,6 +1157,7 @@ def api_marketing_kunlik(month: str, year: int, targetolog: str = "all", respons
               AND d.source_id = :src
               {resp_deal}
               AND d.uf_paid_sum IS NOT NULL AND d.uf_paid_sum > 0
+              AND NULLIF(d.utm_campaign, '') IS NULL
               AND NOT EXISTS (
                 SELECT 1 FROM leads le
                 JOIN lead_phones lp ON lp.lead_id = le.id
