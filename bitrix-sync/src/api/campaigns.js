@@ -5,6 +5,7 @@ const axios = require('axios');
 const pool = require('../db/pool');
 const { extractFields } = require('../services/facebook');
 const { resolvePhone } = require('../services/resolvePhone');
+const { syncActiveCreatives } = require('../services/activeCreatives');
 
 const router = Router();
 
@@ -1854,6 +1855,39 @@ setTimeout(() => {
   syncMetaAdDaily(daysAgoStr(30), todayStr()).catch(e => console.error('[meta_ad_daily] startup sync error:', e.message));
 }, 10_000);
 
+// ── meta_active_creatives sync — list running lead-gen ads in the Creative tab ─
+// facebook_leads only knows ads that already produced a lead, so a new ad was
+// invisible until its first lead. One small /ads call per account (ACTIVE ads
+// only — /ads shares the rate-limit pool noted in getAdFormIds), so every 30 min.
+let activeCreativesSyncRunning = false;
+
+async function syncActiveCreativesAll() {
+  if (activeCreativesSyncRunning || !token()) return;
+  activeCreativesSyncRunning = true;
+  try {
+    for (const acct of allAccountIds()) {
+      try {
+        const ads = await paginate(`${BASE}/${acct}/ads`, {
+          access_token:     token(),
+          fields:           'id,name,created_time,campaign{id,name,objective},adset{id,name},creative{id,name}',
+          effective_status: '["ACTIVE"]',
+          limit:            200,
+        });
+        const { upserted, deactivated } = await syncActiveCreatives(acct, ads, campaignWhitelist(acct));
+        console.log(`[active-creatives] acct=${acct} ${ads.length} active ads, ${upserted} listed, ${deactivated} deactivated`);
+      } catch (acctErr) {
+        // A failed account keeps its previous rows — never deactivate on an API error.
+        console.warn(`[active-creatives] acct=${acct} failed:`, acctErr.message);
+      }
+    }
+  } finally {
+    activeCreativesSyncRunning = false;
+  }
+}
+
+setInterval(() => syncActiveCreativesAll().catch(e => console.error('[active-creatives] sync error:', e.message)), 30 * 60_000);
+setTimeout(() => syncActiveCreativesAll().catch(e => console.error('[active-creatives] startup sync error:', e.message)), 45_000);
+
 // ── Build post URL from effective_object_story_id ({page_id}_{post_id}) ───────
 function buildPostUrl(storyId) {
   if (!storyId || !storyId.includes('_')) return null;
@@ -1886,12 +1920,17 @@ async function syncCreativeNames() {
     // Never-cached ad_ids go first (cc.ad_id IS NULL), so a backlog of brand-new
     // ads is never starved by ads stuck retrying for an unavailable post_url
     // (e.g. dynamic/Advantage+ creatives with no effective_object_story_id).
+    // Active ads with no lead yet (meta_active_creatives) are included so their
+    // thumbnail / post link resolve as soon as they appear in the Creative tab.
     const { rows: adRows } = await pool.query(`
-      SELECT DISTINCT fl.ad_id, (cc.ad_id IS NULL) AS is_new
-      FROM facebook_leads fl
-      LEFT JOIN meta_creative_cache cc ON cc.ad_id = fl.ad_id
-      WHERE fl.ad_id IS NOT NULL AND fl.ad_id != ''
-        AND (cc.ad_id IS NULL OR cc.synced_at < NOW() - INTERVAL '1 hour')
+      SELECT DISTINCT a.ad_id, (cc.ad_id IS NULL) AS is_new
+      FROM (
+        SELECT ad_id FROM facebook_leads WHERE ad_id IS NOT NULL AND ad_id != ''
+        UNION
+        SELECT ad_id FROM meta_active_creatives WHERE status = 'ACTIVE'
+      ) a
+      LEFT JOIN meta_creative_cache cc ON cc.ad_id = a.ad_id
+      WHERE cc.ad_id IS NULL OR cc.synced_at < NOW() - INTERVAL '1 hour'
       ORDER BY is_new DESC
       LIMIT 50
     `);
