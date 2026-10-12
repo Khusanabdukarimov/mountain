@@ -1677,6 +1677,26 @@ router.get('/creative-deals', async (req, res) => {
           ORDER BY d.id, d.date_create DESC
         `, [since, until, sotuvFrom, sotuvTo, adset_name || campaign_name]);
 
+    // The query above only follows deal_phones, so a deal linked through its
+    // lead (Path A of the /creatives sotuv count) never reached this list and
+    // the drill-down showed fewer deals than the number it opens from.
+    const { rows: viaLeadRows } = await pool.query(`
+      SELECT DISTINCT ON (d.id)
+             d.id, fl.phone,
+             r.name || ' ' || COALESCE(r.last_name, '') AS responsible,
+             d.opportunity, d.currency_id, d.date_create, s.name AS stage_name
+      FROM deals d
+      JOIN stages ds ON ds.id = d.stage_id AND ds.is_won = true
+      JOIN leads le ON le.id = d.lead_id
+      JOIN lead_phones lp ON lp.lead_id = le.id
+      JOIN facebook_leads fl ON fl.phone_norm = lp.phone_norm AND fl.campaign_name = le.utm_campaign
+      LEFT JOIN stages s ON s.id = d.stage_id
+      LEFT JOIN responsibles r ON r.id = d.responsible_id
+      WHERE ${adset_name ? 'fl.adset_name' : 'fl.campaign_name'} = $1
+        AND d.uf_bp_sale_date >= $2::date AND d.uf_bp_sale_date <= $3::date
+      ORDER BY d.id, d.date_create DESC
+    `, [adset_name || campaign_name, sotuvFrom, sotuvTo]);
+
     // Path C (same rule as /creatives' sotuv count): won deals with no lead and
     // no phone to match a form lead, attributed by the deal card's own UTM.
     const { rows: ownUtmRows } = await pool.query(`
@@ -1699,7 +1719,11 @@ router.get('/creative-deals', async (req, res) => {
         AND d.uf_bp_sale_date >= $2::date AND d.uf_bp_sale_date <= $3::date
     `, [adset_name || campaign_name, sotuvFrom, sotuvTo]);
     const listed = new Set(rows.map(r => r.id));
-    rows.push(...ownUtmRows.filter(r => !listed.has(r.id)));
+    for (const r of [...viaLeadRows, ...ownUtmRows]) {
+      if (listed.has(r.id)) continue;
+      listed.add(r.id);
+      rows.push(r);
+    }
 
     res.json({
       deals: rows.map(r => ({
