@@ -1444,6 +1444,26 @@ router.get('/creatives', async (req, res) => {
              = dp.phone_norm
           WHERE d.lead_id IS NULL
             AND d.uf_bp_sale_date >= $1::date AND d.uf_bp_sale_date <= $2::date
+          UNION
+          -- Path C: the deal card's own UTM (adset = utm_content, campaign =
+          -- utm_campaign), for deals A and B cannot see: no lead (or a lead with
+          -- no campaign) and no phone to match a form lead, e.g. a returning
+          -- customer's new deal. NOT EXISTS mirrors Path B so a deal is not
+          -- counted twice.
+          SELECT d.id, d.utm_content AS adset_name, d.utm_campaign AS campaign_name,
+                 CASE WHEN d.currency_id = 'USD' THEN COALESCE(d.opportunity, 0) ELSE 0 END AS opp
+          FROM deals d
+          JOIN stages ds ON ds.id = d.stage_id AND ds.is_won = true
+          LEFT JOIN leads le ON le.id = d.lead_id
+          WHERE NULLIF(d.utm_campaign, '') IS NOT NULL
+            AND NULLIF(d.utm_content, '') IS NOT NULL
+            AND (d.lead_id IS NULL OR COALESCE(le.utm_campaign, '') = '')
+            AND NOT EXISTS (
+              SELECT 1 FROM deal_phones dp
+              JOIN facebook_leads fl ON fl.phone_norm = dp.phone_norm
+              WHERE dp.deal_id = d.id AND d.lead_id IS NULL
+            )
+            AND d.uf_bp_sale_date >= $1::date AND d.uf_bp_sale_date <= $2::date
         )
         SELECT adset_name, campaign_name,
                COUNT(DISTINCT id)::int AS sotuv_boldi,
@@ -1656,6 +1676,30 @@ router.get('/creative-deals', async (req, res) => {
             ${adset_name ? "AND fl.adset_name = $5" : "AND fl.campaign_name = $5"}
           ORDER BY d.id, d.date_create DESC
         `, [since, until, sotuvFrom, sotuvTo, adset_name || campaign_name]);
+
+    // Path C (same rule as /creatives' sotuv count): won deals with no lead and
+    // no phone to match a form lead, attributed by the deal card's own UTM.
+    const { rows: ownUtmRows } = await pool.query(`
+      SELECT d.id, NULL::text AS phone,
+             r.name || ' ' || COALESCE(r.last_name, '') AS responsible,
+             d.opportunity, d.currency_id, d.date_create, s.name AS stage_name
+      FROM deals d
+      JOIN stages ds ON ds.id = d.stage_id AND ds.is_won = true
+      LEFT JOIN leads le ON le.id = d.lead_id
+      LEFT JOIN stages s ON s.id = d.stage_id
+      LEFT JOIN responsibles r ON r.id = d.responsible_id
+      WHERE ${adset_name ? 'd.utm_content' : 'd.utm_campaign'} = $1
+        AND NULLIF(d.utm_campaign, '') IS NOT NULL
+        AND (d.lead_id IS NULL OR COALESCE(le.utm_campaign, '') = '')
+        AND NOT EXISTS (
+          SELECT 1 FROM deal_phones dp
+          JOIN facebook_leads fl ON fl.phone_norm = dp.phone_norm
+          WHERE dp.deal_id = d.id AND d.lead_id IS NULL
+        )
+        AND d.uf_bp_sale_date >= $2::date AND d.uf_bp_sale_date <= $3::date
+    `, [adset_name || campaign_name, sotuvFrom, sotuvTo]);
+    const listed = new Set(rows.map(r => r.id));
+    rows.push(...ownUtmRows.filter(r => !listed.has(r.id)));
 
     res.json({
       deals: rows.map(r => ({

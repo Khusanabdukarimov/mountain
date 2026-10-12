@@ -2,15 +2,17 @@
 'use strict';
 
 /**
- * One-off backfill for deals.utm_campaign (the deal card's own UTM_CAMPAIGN).
+ * One-off backfill for deals.utm_campaign / deals.utm_content (the deal card's
+ * own UTM_CAMPAIGN and UTM_CONTENT — the campaign and the adset name).
  *
- * The column is new: webhooks and the daily reconcile fill it going forward,
- * but deals created before it existed sit at NULL. Kunlik attributes a deal
- * that has no lead (e.g. a returning customer's new deal) to a targetolog
- * through this column, so those older deals need it filled in once.
+ * The columns are new: webhooks and the daily reconcile fill them going
+ * forward, but deals created before they existed sit at NULL. Kunlik,
+ * Kampaniyalar and Creative attribute a deal that has no lead (e.g. a
+ * returning customer's new deal) through these columns, so those older deals
+ * need them filled in once.
  *
  * Only deals that cannot inherit a campaign from a lead are touched: no lead,
- * or a lead without utm_campaign.
+ * or a lead without utm_campaign. Existing values are never overwritten.
  *
  * Usage (on the server, from bitrix-sync/):
  *   node scripts/backfill_deal_utm_campaign.js          # apply
@@ -27,23 +29,23 @@ const SINCE = '2026-06-01T00:00:00';
 
 (async () => {
   const col = await pool.query(
-    `SELECT 1 FROM information_schema.columns
-      WHERE table_name = 'deals' AND column_name = 'utm_campaign'`,
+    `SELECT count(*)::int AS n FROM information_schema.columns
+      WHERE table_name = 'deals' AND column_name IN ('utm_campaign', 'utm_content')`,
   );
-  if (!col.rowCount) {
-    console.error('deals.utm_campaign does not exist yet — start the service once so the '
-      + 'startup migration adds it, then re-run this script.');
+  if (col.rows[0].n !== 2) {
+    console.error('deals.utm_campaign / utm_content do not exist yet — start the service once so the '
+      + 'startup migration adds them, then re-run this script.');
     process.exit(1);
   }
 
   const { rows: candidates } = await pool.query(`
     SELECT d.id FROM deals d LEFT JOIN leads l ON l.id = d.lead_id
-    WHERE d.utm_campaign IS NULL AND COALESCE(l.utm_campaign, '') = ''
+    WHERE (d.utm_campaign IS NULL OR d.utm_content IS NULL) AND COALESCE(l.utm_campaign, '') = ''
       AND d.date_create >= $1::timestamp`, [SINCE]);
   const wanted = new Set(candidates.map(r => r.id));
-  console.log(`[backfill] ${wanted.size} deals without a campaign${DRY ? ' (DRY RUN)' : ''}; fetching UTM_CAMPAIGN from Bitrix…`);
+  console.log(`[backfill] ${wanted.size} deals missing campaign or adset${DRY ? ' (DRY RUN)' : ''}; fetching UTM from Bitrix…`);
 
-  const deals = await fetchAll('crm.deal.list', { '>=DATE_CREATE': SINCE }, ['ID', 'UTM_CAMPAIGN'], 'backfill-deal-utm');
+  const deals = await fetchAll('crm.deal.list', { '>=DATE_CREATE': SINCE }, ['ID', 'UTM_CAMPAIGN', 'UTM_CONTENT'], 'backfill-deal-utm');
   console.log(`[backfill] ${deals.length} deals returned`);
 
   let withValue = 0, updated = 0;
@@ -51,11 +53,12 @@ const SINCE = '2026-06-01T00:00:00';
     const id = parseInt(d.ID, 10);
     if (!d.UTM_CAMPAIGN || !wanted.has(id)) continue;
     withValue++;
-    console.log(`  deal ${id} → ${d.UTM_CAMPAIGN}`);
+    console.log(`  deal ${id} → ${d.UTM_CAMPAIGN} | ${d.UTM_CONTENT || '(no adset)'}`);
     if (DRY) continue;
     const r = await pool.query(
-      'UPDATE deals SET utm_campaign = $2 WHERE id = $1 AND utm_campaign IS NULL',
-      [id, d.UTM_CAMPAIGN],
+      `UPDATE deals SET utm_campaign = COALESCE(utm_campaign, $2), utm_content = COALESCE(utm_content, $3)
+        WHERE id = $1 AND (utm_campaign IS NULL OR utm_content IS NULL)`,
+      [id, d.UTM_CAMPAIGN, d.UTM_CONTENT || null],
     );
     updated += r.rowCount;
   }

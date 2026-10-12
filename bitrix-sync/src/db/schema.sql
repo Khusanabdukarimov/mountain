@@ -84,6 +84,7 @@ CREATE TABLE IF NOT EXISTS deals (
   source_id       TEXT,
   utm_source      TEXT,
   utm_campaign    TEXT,
+  utm_content     TEXT,
   title           TEXT,
   date_create     TIMESTAMPTZ,
   date_modify     TIMESTAMPTZ,
