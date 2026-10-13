@@ -129,15 +129,7 @@ function CreativeLeadsPanel({ adsetName, adId, campaignName, month, year, from, 
                     {hasDeal
                       ? <a href={`https://mountain.bitrix24.kz/crm/deal/details/${l.deal_id}/`} target="_blank" rel="noopener noreferrer" className="text-[11px] font-semibold underline underline-offset-2 text-[#22c55e] hover:opacity-80">Sdelka #{l.deal_id} →</a>
                       : l.bitrix_id
-                        ? <div className="flex flex-col gap-0.5">
-                            <a href={`${BX_URL}/${l.bitrix_id}/`} target="_blank" rel="noopener noreferrer" className="text-[11px] font-semibold underline underline-offset-2 text-blue hover:opacity-80 w-fit">#{l.bitrix_id} →</a>
-                            {l.counted_in_bitrix === false && (
-                              <span className="text-[10px] font-semibold px-1 py-0.5 rounded w-fit" style={{ color: "#f59e0b", background: "#f59e0b22" }}
-                                title={l.card_campaign ? `Kartochka hozir boshqa campaignga tegishli: ${l.card_campaign}. Jadvalda "Bitrix'da" ustuniga qo'shilmaydi.` : `Kartochkada UTM campaign yo'q. Jadvalda "Bitrix'da" ustuniga qo'shilmaydi.`}>
-                                {l.card_campaign ? "Karta boshqa campaignda" : "Kartada UTM yo'q"}
-                              </span>
-                            )}
-                          </div>
+                        ? <a href={`${BX_URL}/${l.bitrix_id}/`} target="_blank" rel="noopener noreferrer" className="text-[11px] font-semibold underline underline-offset-2 text-blue hover:opacity-80">#{l.bitrix_id} →</a>
                         : <span className="text-[11px] text-text3/60">—</span>
                     }
                   </td>

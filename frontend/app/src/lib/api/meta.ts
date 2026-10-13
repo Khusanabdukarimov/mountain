@@ -365,10 +365,6 @@ export type CreativeLead = {
   platform:        string;
   campaign_name:   string;
   bitrix_id:       number | null;
-  // The phone's newest Bitrix card carries this campaign? Only then the creative
-  // row counts the lead as "in Bitrix".
-  counted_in_bitrix?: boolean;
-  card_campaign?:  string | null;
   stage_name:      string | null;
   stage_code:      string | null;
   is_duplicate:    boolean;

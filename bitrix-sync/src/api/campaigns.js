@@ -1767,9 +1767,9 @@ router.get('/creative-leads', async (req, res) => {
         HAVING COUNT(*) > 1
       ),
       -- Same "latest card wins" rule as the creative row's counts (/creatives): a
-      -- phone has one newest Bitrix card, and the row counts a form lead as "in
-      -- Bitrix" only when that card carries this lead's campaign. A returning
-      -- contact's card is re-tagged by each new submission.
+      -- phone has one newest Bitrix card (a returning contact's card is re-tagged
+      -- by each new submission), so the id and stage shown here are that card's,
+      -- not an arbitrary one among the phone's cards.
       lead_latest AS (
         SELECT DISTINCT ON (last9) last9, l.id, l.stage_id, l.utm_campaign FROM (
           SELECT lp.phone_norm AS last9, lp.lead_id FROM lead_phones lp WHERE lp.phone_norm <> ''
@@ -1784,8 +1784,6 @@ router.get('/creative-leads', async (req, res) => {
         fl.platform,
         fl.campaign_name,
         ll.id           AS bitrix_id,
-        ll.utm_campaign AS card_campaign,
-        (ll.id IS NOT NULL AND ll.utm_campaign = fl.campaign_name) AS counted_in_bitrix,
         s.name          AS stage_name,
         s.bitrix_id     AS stage_code,
         (dp.last9 IS NOT NULL) AS is_duplicate,
@@ -1811,7 +1809,7 @@ router.get('/creative-leads', async (req, res) => {
         AND ($4::text IS NULL OR fl.ad_id = $4::text)
         AND ($5::text IS NULL OR fl.campaign_name = $5::text)
       GROUP BY fl.id, fl.full_name, fl.phone, fl.created_time, fl.platform, fl.campaign_name,
-               ll.id, ll.utm_campaign, s.name, s.bitrix_id, dp.last9
+               ll.id, s.name, s.bitrix_id, dp.last9
       ORDER BY fl.created_time DESC
     `, [adset_name, since, until, req.query.ad_id || null, req.query.campaign_name || null]);
 
@@ -1829,8 +1827,6 @@ router.get('/creative-leads', async (req, res) => {
         platform:       r.platform,
         campaign_name:  r.campaign_name,
         bitrix_id:      r.bitrix_id || null,
-        card_campaign:  r.card_campaign || null,
-        counted_in_bitrix: !!r.counted_in_bitrix,
         stage_name:     r.stage_name || null,
         stage_code:     r.stage_code || null,
         is_duplicate:   r.is_duplicate || false,
