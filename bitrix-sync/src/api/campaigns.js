@@ -1794,10 +1794,15 @@ router.get('/creative-leads', async (req, res) => {
       WHERE fl.adset_name = $1
         AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date >= $2::date
         AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date <= $3::date
+        -- A creative row is one ad (ad_id) of one campaign. Several ads, even in
+        -- different campaigns, share an adset name, so without these the list
+        -- held the whole adset and disagreed with the row's own lead count.
+        AND ($4::text IS NULL OR fl.ad_id = $4::text)
+        AND ($5::text IS NULL OR fl.campaign_name = $5::text)
       GROUP BY fl.id, fl.full_name, fl.phone, fl.created_time, fl.platform, fl.campaign_name,
                l.id, s.name, s.bitrix_id, dp.last9
       ORDER BY fl.created_time DESC
-    `, [adset_name, since, until]);
+    `, [adset_name, since, until, req.query.ad_id || null, req.query.campaign_name || null]);
 
     // Deduplicate: one facebook lead may match multiple phone entries
     const seen = new Set();

@@ -419,13 +419,19 @@ export function getCampaignFormStats(from?: string, to?: string, formIds?: strin
   });
 }
 
-export function getCreativeLeads(adset_name: string, month: MonthKey, year: number, from?: string, to?: string) {
+export function getCreativeLeads(
+  adset_name: string, month: MonthKey, year: number, from?: string, to?: string,
+  ad_id?: string | null, campaign_name?: string,
+) {
   return apiGet<{ adset_name: string; leads: CreativeLead[] }>(
     '/api/campaigns/creative-leads',
     {
       adset_name, month, year,
       ...(from ? { from } : {}),
       ...(to   ? { to }   : {}),
+      // One creative row = one ad of one campaign; adset names are shared.
+      ...(ad_id ? { ad_id } : {}),
+      ...(campaign_name ? { campaign_name } : {}),
     },
   );
 }

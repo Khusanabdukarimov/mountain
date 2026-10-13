@@ -89,10 +89,10 @@ function notInBitrixReason(phone: string, isDuplicate: boolean): string {
   return 'Bitrix24 da yo\'q';
 }
 
-function CreativeLeadsPanel({ adsetName, month, year, from, to }: { adsetName: string; month: MonthKey; year: number; from: string; to: string }) {
+function CreativeLeadsPanel({ adsetName, adId, campaignName, month, year, from, to }: { adsetName: string; adId?: string | null; campaignName?: string; month: MonthKey; year: number; from: string; to: string }) {
   const q = useQuery({
-    queryKey: ["creative-leads", adsetName, month, year, from, to],
-    queryFn: () => getCreativeLeads(adsetName, month, year, from, to),
+    queryKey: ["creative-leads", adsetName, adId, campaignName, month, year, from, to],
+    queryFn: () => getCreativeLeads(adsetName, month, year, from, to, adId, campaignName),
     staleTime: 2 * 60_000,
   });
   if (q.isLoading) return <tr><td colSpan={10} className="px-6 py-4"><div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-3 w-full" />)}</div></td></tr>;
@@ -1393,7 +1393,7 @@ export default function KampaniyalarPage() {
                                 <td className={`${TD} text-right text-[11px]`}><span className={r.bekor_boldi > 0 ? "text-amber" : "text-text3"}>{r.bekor_boldi}</span></td>
                                 <td className={TD}><SifatBar rate={r.sifat_rate} /></td>
                               </tr>
-                              {isExpAd    && <CreativeLeadsPanel key={`panel-${adKey}`} adsetName={r.adset_name} month={month} year={year} from={fromDate} to={toDate} />}
+                              {isExpAd    && <CreativeLeadsPanel key={`panel-${adKey}`} adsetName={r.adset_name} adId={r.ad_id} campaignName={r.campaign_name} month={month} year={year} from={fromDate} to={toDate} />}
                               {isExpSotuv && <SotuvDealsPanel    key={`sotuv-${adKey}`} adsetName={r.adset_name} month={month} year={year} from={fromDate} to={toDate} />}
                             </>
                           );
