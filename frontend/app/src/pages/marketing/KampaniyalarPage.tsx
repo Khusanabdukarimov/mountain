@@ -9,7 +9,7 @@ import { Skeleton } from "@/components/Skeleton";
 import {
   getMetaInsights, getMetaCampaigns, getCampaignForms, getFormLeads,
   getPageForms, getKunlikHisobot, getCampaignCreatives, getCreativeLeads, getCreativeDeals,
-  getActiveCampaignNames, getCampaignFormStats, getCampaignAssignments, MONTH_KEYS,
+  getActiveCampaignNames, getCampaignFormStats, getCampaignAssignments, getSifatliTotal, MONTH_KEYS,
 } from "@/lib/api/meta";
 import type { MonthKey, PageForm } from "@/lib/api/meta";
 import { fmtNum } from "@/lib/utils";
@@ -87,6 +87,26 @@ function notInBitrixReason(phone: string, isDuplicate: boolean): string {
   if (digits.length < 9) return 'Telefon noto\'g\'ri';
   if (isDuplicate) return 'Duplikat';
   return 'Bitrix24 da yo\'q';
+}
+
+// "Sifatli" total over exactly the slice on screen, computed like Kunlik hisobot's
+// "Maqsadli lidlar soni": distinct (day, person), so the headline matches that page.
+// A sum of table rows is higher whenever one person applied to two ads on the same
+// day (they are in both rows), so totals ask the server; the row sum is only shown
+// while that request is loading or if it fails.
+function useSifatliTotal(from: string, to: string, scope: { campaigns?: string[]; adIds?: string[]; formIds?: string[] }, fallback: number) {
+  const q = useQuery({
+    queryKey: ["sifatli-total", from, to, JSON.stringify(scope)],
+    queryFn: () => getSifatliTotal(from, to, scope),
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  });
+  return q.data?.total ?? fallback;
+}
+
+function SifatliTotalCell({ from, to, scope, fallback, className }: { from: string; to: string; scope: { campaigns?: string[]; adIds?: string[]; formIds?: string[] }; fallback: number; className: string }) {
+  const total = useSifatliTotal(from, to, scope, fallback);
+  return <td className={className}>{total}</td>;
 }
 
 function CreativeLeadsPanel({ adsetName, adId, campaignName, month, year, from, to }: { adsetName: string; adId?: string | null; campaignName?: string; month: MonthKey; year: number; from: string; to: string }) {
@@ -719,10 +739,21 @@ export default function KampaniyalarPage() {
     [visibleForms, formDbStatsMap, formLeadsMap],
   );
 
-  const totalSifatliFromForms = useMemo(
+  const totalSifatliRowSum = useMemo(
     () => filteredCreativesForKpi.reduce((a, r) => a + (r.sifatli ?? 0), 0),
     [filteredCreativesForKpi],
   );
+  // What the card counts: campaigns (targetolog / Kampaniya filters) when only
+  // those are set, otherwise exactly the ads left after the Adset / Creative /
+  // Forma filters. No filter = everything, i.e. Kunlik's own total.
+  const narrowedByAd = filterAdsets.length > 0 || filterCreatives.length > 0 || !!formAdsetNames;
+  const sifatliScope = useMemo(() => {
+    if (narrowedByAd) return { adIds: filteredCreativesForKpi.map(r => r.ad_id).filter((x): x is string => !!x) };
+    if (!targetologCampSet && filterCampaigns.length === 0) return {};
+    const base = targetologCampSet ? [...targetologCampSet] : filterCampaigns;
+    return { campaigns: base.filter(c => (!targetologCampSet || targetologCampSet.has(c)) && (filterCampaigns.length === 0 || filterCampaigns.includes(c))) };
+  }, [narrowedByAd, filteredCreativesForKpi, targetologCampSet, filterCampaigns]);
+  const totalSifatliFromForms = useSifatliTotal(fromDate, toDate, sifatliScope, totalSifatliRowSum);
 
   const totalSotuvFromCreatives = useMemo(
     () => (formStatsQ.data?.rows ?? [])
@@ -1152,7 +1183,8 @@ export default function KampaniyalarPage() {
                           <td className="px-4 py-2.5 text-[11px] font-bold text-text" colSpan={2}>JAMI</td>
                           <td className="px-4 py-2.5 font-bold text-text">${Math.round(totals.spend)}</td>
                           <td className="px-4 py-2.5 font-bold text-blue">{totals.jami}</td>
-                          <td className="px-4 py-2.5 font-bold text-green">{totals.sifatli}</td>
+                          <SifatliTotalCell from={fromDate} to={toDate} className="px-4 py-2.5 font-bold text-green" fallback={totals.sifatli}
+                            scope={{ campaigns: fsRows.map(r => r.campaign_name), ...(filterFormIds.length ? { formIds: filterFormIds } : {}) }} />
                           <td className="px-4 py-2.5 text-red/80">{totals.sifatsiz}</td>
                           <td className="px-4 py-2.5 text-amber">{totals.bekor}</td>
                           <td className="px-4 py-2.5 font-bold" style={{ color: "#22c55e" }}>{totals.sotuv}</td>
@@ -1406,7 +1438,8 @@ export default function KampaniyalarPage() {
                             <td className={`${TD} text-right font-bold text-text`}>${Math.round(totals.spend)}</td>
                             <td className={`${TD} text-right font-bold text-text2`}>{totals.meta_leads}</td>
                             <td className={`${TD} text-right font-bold text-blue`}>{totals.in_bitrix}</td>
-                            <td className={`${TD} text-right font-bold text-green`}>{totals.sifatli}</td>
+                            <SifatliTotalCell from={fromDate} to={toDate} className={`${TD} text-right font-bold text-green`} fallback={totals.sifatli}
+                              scope={{ adIds: filtered.map(r => r.ad_id).filter((x): x is string => !!x) }} />
                             <td className={`${TD} text-right font-bold text-text2`}>{totals.hook_rate ? `${totals.hook_rate}%` : "—"}</td>
                             <td className={`${TD} text-right font-bold text-text2`}>{totals.hold_rate ? `${totals.hold_rate}%` : "—"}</td>
                             <td className={`${TD} text-right font-bold`} style={{ color: "#22c55e" }}>{totals.sotuv_boldi}</td>

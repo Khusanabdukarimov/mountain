@@ -419,6 +419,21 @@ export function getCampaignFormStats(from?: string, to?: string, formIds?: strin
   });
 }
 
+// Distinct (day, person) "sifatli" over exactly the slice on screen — the figure
+// Kunlik hisobot shows for the same campaigns (a sum of table rows overcounts a
+// person who applied to two ads the same day). Omit a scope key for "everything".
+export function getSifatliTotal(
+  from: string, to: string,
+  scope: { campaigns?: string[]; adIds?: string[]; formIds?: string[] } = {},
+) {
+  return apiGet<{ total: number }>('/api/campaigns/sifatli-total', {
+    from, to,
+    ...(scope.campaigns ? { campaigns: JSON.stringify(scope.campaigns) } : {}),
+    ...(scope.adIds     ? { ad_ids:    JSON.stringify(scope.adIds) }     : {}),
+    ...(scope.formIds   ? { form_ids:  JSON.stringify(scope.formIds) }   : {}),
+  });
+}
+
 export function getCreativeLeads(
   adset_name: string, month: MonthKey, year: number, from?: string, to?: string,
   ad_id?: string | null, campaign_name?: string,

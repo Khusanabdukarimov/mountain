@@ -437,6 +437,63 @@ router.get('/active-names', async (req, res) => {
 // is also how Meta attributes it, so late-night leads no longer drift to the
 // next day. Must stay consistent with backend/app/main.py (kunlik/page-forms).
 
+// ── "Maqsadli / sifatli lid" — the Kunlik hisobot rule, in one place ──────────
+// backend/app/main.py (api_marketing_kunlik) counts a person once per day when the
+// phone of one of their Meta form submissions belongs to ANY Bitrix lead at a
+// qualified stage, or to a lead-less deal at one. It neither requires the card to
+// carry the submission's campaign nor looks only at the newest card. The Campaign,
+// Forma and Creative tables used a stricter variant (newest card, UTM must match,
+// one count per submission), so the same month showed different "sifatli" numbers
+// on the two pages. COUNT(DISTINCT <this>) yields Kunlik's number for any slice of
+// facebook_leads: a campaign, an ad, a form, or everything.
+const SIFATLI_STAGES = `'THINKING','UC_KXC3ZW','CONSULTATION','UC_L28G68','NOT_TRANSFERRED','UC_5G8244','CONVERTED_CONSULT','CONVERTED','UC_NAZK5J','RECYCLED'`;
+function sifatliPersonDay(fl = 'fl') {
+  return `CASE WHEN LENGTH(${fl}.phone_norm) >= 9 AND (
+      EXISTS (SELECT 1 FROM lead_phones sp_lp
+                JOIN leads sp_le ON sp_le.id = sp_lp.lead_id
+                JOIN stages sp_s ON sp_s.id = sp_le.stage_id AND sp_s.entity = 'lead'
+               WHERE sp_lp.phone_norm = ${fl}.phone_norm AND sp_s.bitrix_id IN (${SIFATLI_STAGES}))
+      OR EXISTS (SELECT 1 FROM deal_phones sp_dp
+                JOIN deals sp_d ON sp_d.id = sp_dp.deal_id AND sp_d.lead_id IS NULL
+                JOIN stages sp_ds ON sp_ds.id = sp_d.stage_id AND sp_ds.entity = 'deal'
+               WHERE sp_dp.phone_norm = ${fl}.phone_norm AND sp_ds.bitrix_id IN (${SIFATLI_STAGES}))
+    ) THEN (${fl}.created_time AT TIME ZONE 'Asia/Tashkent')::date::text || '|' || ${fl}.phone_norm END`;
+}
+
+// GET /api/campaigns/sifatli-total?from=2026-10-01&to=2026-10-31[&campaigns=<json array>][&ad_ids=<json array>][&form_ids=<json array>]
+// Distinct (day, person) over the chosen slice — the figure a sum of table rows
+// cannot give (a person who applied to two ads the same day is in both rows), and
+// the one Kunlik shows for the same campaigns.
+router.get('/sifatli-total', async (req, res) => {
+  const { from, to } = req.query;
+  const isDate = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
+  if (!isDate(from) || !isDate(to)) return res.status(400).json({ error: 'from and to (YYYY-MM-DD) required' });
+  const list = raw => {
+    if (raw == null || raw === '') return null;
+    const v = JSON.parse(raw);
+    if (!Array.isArray(v) || v.some(x => typeof x !== 'string')) throw new Error('array of strings expected');
+    return v;
+  };
+  let campaigns, adIds, formIds;
+  try { campaigns = list(req.query.campaigns); adIds = list(req.query.ad_ids); formIds = list(req.query.form_ids); }
+  catch (e) { return res.status(400).json({ error: `bad filter: ${e.message}` }); }
+  try {
+    const { rows } = await pool.query(`
+      SELECT COUNT(DISTINCT ${sifatliPersonDay()})::int AS total
+      FROM facebook_leads fl
+      WHERE (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date >= $1::date
+        AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date <= $2::date
+        AND ($3::text[] IS NULL OR fl.campaign_name = ANY($3::text[]))
+        AND ($4::text[] IS NULL OR fl.ad_id = ANY($4::text[]))
+        AND ($5::text[] IS NULL OR fl.form_id = ANY($5::text[]))
+    `, [from, to, campaigns, adIds, formIds]);
+    res.json({ total: rows[0].total });
+  } catch (err) {
+    console.error('[campaigns/sifatli-total]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/campaigns/form-stats?from=2026-06-01&to=2026-06-15&form_id=123,456
 router.get('/form-stats', async (req, res) => {
   const from = req.query.from || null;
@@ -561,8 +618,7 @@ router.get('/form-stats', async (req, res) => {
         COUNT(DISTINCT CASE WHEN LENGTH(fl.phone_norm) >= 9 THEN fl.id END)::int              AS tasdiqlangan,
         COUNT(DISTINCT CASE WHEN le.id IS NOT NULL OR dp.deal_id IS NOT NULL THEN fl.id END)::int                              AS bitrixda_bor,
         COUNT(DISTINCT CASE WHEN le.id IS NULL AND dp.deal_id IS NULL THEN fl.id END)::int                                     AS bitrixda_yoq,
-        COUNT(DISTINCT CASE WHEN (le.id IS NOT NULL AND s.bitrix_id IN ('THINKING','UC_KXC3ZW','CONSULTATION','UC_L28G68','NOT_TRANSFERRED','UC_5G8244','CONVERTED_CONSULT','CONVERTED','UC_NAZK5J','RECYCLED'))
-                                 OR (dp.deal_id IS NOT NULL AND ds.bitrix_id IN ('THINKING','UC_KXC3ZW','CONSULTATION','UC_L28G68','NOT_TRANSFERRED','UC_5G8244','CONVERTED_CONSULT','CONVERTED','UC_NAZK5J','RECYCLED')) THEN fl.id END)::int AS sifatli,
+        COUNT(DISTINCT ${sifatliPersonDay()})::int AS sifatli,
         COUNT(DISTINCT CASE WHEN s.bitrix_id = 'UC_F8K4GI' OR ds.bitrix_id = 'UC_F8K4GI' THEN fl.id END)::int                AS sifatsiz,
         COUNT(DISTINCT CASE WHEN s.bitrix_id = 'UC_NAZK5J' OR ds.bitrix_id = 'UC_NAZK5J' THEN fl.id END)::int                AS bekor_boldi,
         COALESCE(sc.sotuv_boldi, 0)::int                                                                                       AS sotuv_boldi
@@ -954,10 +1010,7 @@ router.get('/forms', async (req, res) => {
       )
       SELECT
         fl.form_id,
-        COUNT(DISTINCT CASE WHEN
-            (le.id IS NOT NULL AND s.bitrix_id IN ('THINKING','UC_KXC3ZW','CONSULTATION','UC_L28G68','NOT_TRANSFERRED','UC_5G8244','CONVERTED_CONSULT','CONVERTED','UC_NAZK5J','RECYCLED'))
-            OR (dp.deal_id IS NOT NULL AND ds.bitrix_id IN ('THINKING','UC_KXC3ZW','CONSULTATION','UC_L28G68','NOT_TRANSFERRED','UC_5G8244','CONVERTED_CONSULT','CONVERTED','UC_NAZK5J','RECYCLED'))
-          THEN fl.id END)::int AS sifatli_lid
+        COUNT(DISTINCT ${sifatliPersonDay()})::int AS sifatli_lid
       FROM facebook_leads fl
       LEFT JOIN lead_latest le
         ON le.last9 = fl.phone_norm
@@ -1387,8 +1440,7 @@ router.get('/creatives', async (req, res) => {
         COUNT(DISTINCT fl.id)::int        AS meta_leads,
         COUNT(DISTINCT CASE WHEN le.id IS NOT NULL                                            THEN fl.id END)::int AS in_bitrix,
         COUNT(DISTINCT CASE WHEN le.id IS NULL                                                THEN fl.id END)::int AS not_in_bitrix,
-        COUNT(DISTINCT CASE WHEN le.id IS NOT NULL AND s.bitrix_id IN ('THINKING','UC_KXC3ZW','CONSULTATION','UC_L28G68','NOT_TRANSFERRED','UC_5G8244','CONVERTED_CONSULT','CONVERTED','UC_NAZK5J','RECYCLED')
-                                                                                               THEN fl.id END)::int AS sifatli,
+        COUNT(DISTINCT ${sifatliPersonDay()})::int AS sifatli,
         COUNT(DISTINCT CASE WHEN s.bitrix_id = 'UC_F8K4GI'                                   THEN fl.id END)::int AS sifatsiz,
         COUNT(DISTINCT CASE WHEN s.bitrix_id = 'UC_NAZK5J'                                   THEN fl.id END)::int AS bekor_boldi,
         COUNT(DISTINCT CASE WHEN s.bitrix_id = 'CONVERTED'                                   THEN fl.id END)::int AS konsultatsiya_otdi,
