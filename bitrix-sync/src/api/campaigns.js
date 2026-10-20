@@ -2008,10 +2008,13 @@ setTimeout(() => {
   syncMetaAdDaily(daysAgoStr(30), todayStr()).catch(e => console.error('[meta_ad_daily] startup sync error:', e.message));
 }, 10_000);
 
-// ── meta_active_creatives sync — list running lead-gen ads in the Creative tab ─
+// ── meta_active_creatives sync — list running ads in the Creative tab ─────────
 // facebook_leads only knows ads that already produced a lead, so a new ad was
-// invisible until its first lead. One small /ads call per account (ACTIVE ads
-// only — /ads shares the rate-limit pool noted in getAdFormIds), so every 30 min.
+// invisible until its first lead. One small /ads call per account (running and
+// in-review ads only — /ads shares the rate-limit pool noted in getAdFormIds),
+// so every 30 min. In-review ads are listed at once rather than after approval;
+// one that gets rejected drops out of the next fetch and is deactivated.
+const LISTED_AD_STATUSES = JSON.stringify(['ACTIVE', 'PENDING_REVIEW', 'IN_PROCESS', 'PREAPPROVED', 'WITH_ISSUES']);
 let activeCreativesSyncRunning = false;
 
 async function syncActiveCreativesAll() {
@@ -2023,11 +2026,11 @@ async function syncActiveCreativesAll() {
         const ads = await paginate(`${BASE}/${acct}/ads`, {
           access_token:     token(),
           fields:           'id,name,created_time,campaign{id,name,objective},adset{id,name},creative{id,name}',
-          effective_status: '["ACTIVE"]',
+          effective_status: LISTED_AD_STATUSES,
           limit:            200,
         });
         const { upserted, deactivated } = await syncActiveCreatives(acct, ads, campaignWhitelist(acct));
-        console.log(`[active-creatives] acct=${acct} ${ads.length} active ads, ${upserted} listed, ${deactivated} deactivated`);
+        console.log(`[active-creatives] acct=${acct} ${ads.length} running/in-review ads, ${upserted} listed, ${deactivated} deactivated`);
       } catch (acctErr) {
         // A failed account keeps its previous rows — never deactivate on an API error.
         console.warn(`[active-creatives] acct=${acct} failed:`, acctErr.message);

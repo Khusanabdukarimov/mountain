@@ -80,3 +80,17 @@ test('deactivation is scoped to the account and compares against every active ad
   // on Meta, so it must not be passed as "gone".
   assert.deepEqual(state.deactivate, [['act_123', '123'], ['a', 'awareness']]);
 });
+
+test('lists traffic ads like lead-gen ones, but still not awareness or engagement ads', async () => {
+  state.known = []; state.inserted = [];
+  const ads = [
+    ad('traffic', { campaign: { id: 'c4', name: 'Traffic', objective: 'OUTCOME_TRAFFIC' } }),
+    ad('legacy-traffic', { campaign: { id: 'c5', name: 'Legacy traffic', objective: 'LINK_CLICKS' } }),
+    ad('awareness', { campaign: { id: 'c2', name: 'Awareness', objective: 'OUTCOME_AWARENESS' } }),
+    ad('engagement', { campaign: { id: 'c6', name: 'Engagement', objective: 'OUTCOME_ENGAGEMENT' } }),
+  ];
+
+  await syncActiveCreatives('act_1', ads, null, NOW);
+
+  assert.deepEqual(state.inserted.map(p => p[0]), ['traffic', 'legacy-traffic']);
+});

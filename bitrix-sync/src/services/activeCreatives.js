@@ -2,21 +2,25 @@
 
 const pool = require('../db/pool');
 
-// Only lead-gen ads feed the Creative tab (it reports lead quality per ad).
-const LEAD_OBJECTIVES = new Set(['OUTCOME_LEADS', 'LEAD_GENERATION']);
+// Lead-gen ads (the tab reports lead quality per ad) and traffic ads (their spend
+// and hook rate are what the team watches, and they have no leads to be listed
+// by). Awareness / engagement ads stay out: nothing there maps to this tab.
+const LISTED_OBJECTIVES = new Set(['OUTCOME_LEADS', 'LEAD_GENERATION', 'OUTCOME_TRAFFIC', 'LINK_CLICKS']);
 // An ad that has produced no lead yet is listed only while it is still new, so
 // long-running legacy ads do not clutter the tab. Ads we already list stay
 // listed for as long as they are active, whatever their age.
 const NEW_AD_WINDOW_MS = 30 * 24 * 3600 * 1000;
 
 /**
- * Mirror one ad account's currently running lead-gen ads into
+ * Mirror one ad account's running ads (and ads about to run: in review) into
  * meta_active_creatives, so the Creative tab lists them before their first lead
- * arrives (facebook_leads only knows ads that already produced a lead).
+ * arrives (facebook_leads only knows ads that already produced a lead). A listed
+ * ad that is no longer in `ads` (paused, rejected, deleted) is deactivated.
  *
  * @param {string}        acct      'act_123…'
- * @param {object[]}      ads       /{acct}/ads rows already restricted to effective_status=ACTIVE,
- *                                  with campaign{id,name,objective}, adset{id,name}, creative{id,name}
+ * @param {object[]}      ads       /{acct}/ads rows already restricted to the running / in-review
+ *                                  effective statuses, with campaign{id,name,objective},
+ *                                  adset{id,name}, creative{id,name}
  * @param {string[]|null} whitelist campaign ids allowed for this account, null = all
  * @returns {Promise<{upserted: number, deactivated: number}>}
  */
@@ -25,7 +29,7 @@ async function syncActiveCreatives(acct, ads, whitelist = null, now = Date.now()
   const knownIds = new Set(known.map(r => r.ad_id));
 
   const wanted = ads.filter(ad =>
-    LEAD_OBJECTIVES.has(ad.campaign?.objective) &&
+    LISTED_OBJECTIVES.has(ad.campaign?.objective) &&
     (!whitelist || whitelist.includes(ad.campaign?.id)) &&
     (knownIds.has(ad.id) || now - Date.parse(ad.created_time) <= NEW_AD_WINDOW_MS)
   );
