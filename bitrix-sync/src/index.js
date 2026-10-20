@@ -28,6 +28,11 @@ app.disable('etag'); // Prevent 304 responses with stale cached API data
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
+// Subscription expiry guard for /api/* — before auth, so a locked dashboard
+// answers 402 even to a client that is not logged in. /webhook/* is not touched.
+const { subscriptionGuard, ensureTable: ensureSubscriptionTable } = require('./middleware/subscription');
+app.use(subscriptionGuard);
+
 // JWT auth for /api/* (no-op unless AUTH_ENABLED=true + JWT_SECRET set)
 const { authMiddleware } = require('./middleware/auth');
 app.use(authMiddleware);
@@ -72,6 +77,7 @@ app.get('/health', async (req, res) => {
 
 // Run all migrations before accepting connections
 Promise.all([
+  ensureSubscriptionTable().catch(err => console.error('[startup] app_subscription migration failed:', err.message)),
   pool.query(`
     ALTER TABLE responsibles ADD COLUMN IF NOT EXISTS taqsimot_enabled BOOLEAN;
     UPDATE responsibles

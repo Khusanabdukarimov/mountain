@@ -25,6 +25,7 @@ from typing import List
 from app.api.routes import payroll as payroll_routes
 from app.api.routes import call_stats as call_stats_routes
 from app.core import auth as auth_module
+from app.core import subscription as subscription_module
 from app.db import init_db, engine as _db_engine
 from sqlmodel import Session as _Session, select as sql_select
 from app.db_bx import init_bx_db, bx_engine
@@ -38,6 +39,10 @@ app = FastAPI(openapi_url="/api/openapi.json", docs_url="/api/docs")
 # Auth middleware (no-op unless AUTH_ENABLED=true env)
 auth_module.install_auth_middleware(app)
 
+# Subscription expiry guard. Installed after auth on purpose: it must run first,
+# so a locked dashboard answers 402 even to a client that is not logged in.
+subscription_module.install_subscription_middleware(app)
+
 # Serve uploaded avatars
 AVATAR_DIR = BACKEND_DIR / "data" / "avatars"
 AVATAR_DIR.mkdir(parents=True, exist_ok=True)
@@ -48,6 +53,7 @@ app.mount("/avatars", StaticFiles(directory=str(AVATAR_DIR)), name="avatars")
 def _on_startup():
     init_db()
     init_bx_db()
+    subscription_module.ensure_table()
 
 
 app.include_router(payroll_routes.router)
