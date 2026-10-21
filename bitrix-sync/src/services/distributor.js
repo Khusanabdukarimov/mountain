@@ -1,5 +1,6 @@
 const pool = require('../db/pool');
 const { bitrixCall } = require('./bitrix');
+const { getStatus: getSubscriptionStatus } = require('../middleware/subscription');
 
 /**
  * Distribute a new lead to the responsible with the largest deficit.
@@ -15,6 +16,16 @@ const { bitrixCall } = require('./bitrix');
  * @returns {Promise<number|null>} responsible_id assigned, or null
  */
 async function distributeLead(leadId, campaignName = null) {
+  // Distribution is part of the subscription: once it has expired, new leads are
+  // received and stored but not handed to operators (they stay on the main
+  // account), and it resumes by itself when the subscription is extended — see
+  // middleware/subscription.js and scripts/set_subscription.js. Every caller
+  // (leadCreated, leadUpdated's UTM re-route, the Facebook webhook) goes through here.
+  if ((await getSubscriptionStatus()).expired) {
+    console.log(`[distributor] Lead ${leadId} NOT distributed: subscription expired, distribution is paused`);
+    return null;
+  }
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
