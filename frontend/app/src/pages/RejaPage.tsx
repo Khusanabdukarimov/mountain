@@ -620,7 +620,9 @@ function ProgressView({ planId }: { planId: number }) {
   const { subperiods, employees } = data;
   if (!employees.length) return null;
 
-  const maxTarget = Math.max(...employees.map(e => e.target), 1);
+  // Someone with a $0 plan has no weekly plan: they are not in the list (their sales still count in the totals below)
+  const planned = employees.filter(e => e.target > 0);
+  const maxTarget = Math.max(...planned.map(e => e.target), 1);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '0 24px 96px' }}>
@@ -684,7 +686,7 @@ function ProgressView({ planId }: { planId: number }) {
               </tr>
             </thead>
             <tbody>
-              {employees.map((emp, i) => (
+              {planned.map((emp, i) => (
                 <tr key={emp.responsible_id} style={{ background: i % 2 === 0 ? 'transparent' : 'rgba(255,255,255,0.012)' }}>
                   {/* Name */}
                   <td style={{ padding: '12px 14px', borderBottom: '1px solid var(--border)', position: 'sticky', left: 0, background: 'var(--bg)', zIndex: 1 }}>
@@ -704,15 +706,8 @@ function ProgressView({ planId }: { planId: number }) {
                     </div>
                   </td>
 
-                  {/* Sub-period columns — nobody with a $0 plan has a weekly plan, so those cells stay empty */}
-                  {emp.target <= 0 ? emp.subperiods.map(sp => (
-                    <td key={sp.index} style={{
-                      borderBottom: '1px solid var(--border)',
-                      borderLeft: sp.isCurrent ? '2px solid rgba(37,99,235,0.35)' : '1px solid var(--border)',
-                      borderRight: sp.isCurrent ? '2px solid rgba(37,99,235,0.35)' : 'none',
-                      background: sp.isCurrent ? 'rgba(37,99,235,0.04)' : 'transparent',
-                    }} />
-                  )) : emp.subperiods.map(sp => {
+                  {/* Sub-period columns */}
+                  {emp.subperiods.map(sp => {
                     const met      = sp.actual >= sp.target * 0.9;
                     const exceeded = sp.actual > sp.target;
                     const barColor = sp.isPast
@@ -1028,7 +1023,8 @@ function SummaryRow({ employees, subperiods, summary }: SummaryRowProps) {
           Chempionlar
         </div>
         <div style={{ flex: 1, padding: '12px 20px', display: 'flex', flexDirection: 'column', justifyContent: 'space-evenly' }}>
-          {[...employees]
+          {employees
+            .filter(e => e.target > 0)
             .sort((a, b) => b.total_actual - a.total_actual)
             .slice(0, 5)
             .map((emp, i) => {
