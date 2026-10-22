@@ -6,6 +6,7 @@ const pool = require('../db/pool');
 const { extractFields } = require('../services/facebook');
 const { resolvePhone } = require('../services/resolvePhone');
 const { syncActiveCreatives } = require('../services/activeCreatives');
+const { attributedSales, rowKey } = require('../services/creativeSales');
 
 const router = Router();
 
@@ -1463,69 +1464,23 @@ router.get('/creatives', async (req, res) => {
       ORDER BY meta_leads DESC
     `, [since, until, sotuvFrom, sotuvTo]);
 
-    // 1b. Sotuv per adset via two paths (always run, not just for separate sotuv dates):
-    //   Path A: deals -> lead_id -> leads -> lead_phones -> facebook_leads (UTM match)
-    //   Path B: deals -> deal_phones -> facebook_leads (for deals without lead_id)
-    let sotuvByAdset = {};
-    {
-      const { rows: sotuvRows } = await pool.query(`
-        WITH deduped AS (
-          -- Path A: deduplicate deal per (adset, campaign) before summing
-          SELECT DISTINCT ON (d.id, fl.adset_name, fl.campaign_name)
-                 d.id, COALESCE(fl.adset_name, 'N/A') AS adset_name, COALESCE(fl.campaign_name, 'N/A') AS campaign_name,
-                 CASE WHEN d.currency_id = 'USD' THEN COALESCE(d.opportunity, 0) ELSE 0 END AS opp
-          FROM deals d
-          JOIN stages ds ON ds.id = d.stage_id AND ds.is_won = true
-          JOIN leads le ON le.id = d.lead_id
-          JOIN lead_phones lp ON lp.lead_id = le.id
-          JOIN facebook_leads fl
-            ON fl.phone_norm
-             = lp.phone_norm
-            AND fl.campaign_name = le.utm_campaign
-          WHERE d.uf_bp_sale_date >= $1::date AND d.uf_bp_sale_date <= $2::date
-          UNION
-          -- Path B: deduplicate deal per (adset, campaign) before summing
-          SELECT DISTINCT ON (d.id, fl.adset_name, fl.campaign_name)
-                 d.id, COALESCE(fl.adset_name, 'N/A') AS adset_name, COALESCE(fl.campaign_name, 'N/A') AS campaign_name,
-                 CASE WHEN d.currency_id = 'USD' THEN COALESCE(d.opportunity, 0) ELSE 0 END AS opp
-          FROM deals d
-          JOIN stages ds ON ds.id = d.stage_id AND ds.is_won = true
-          JOIN deal_phones dp ON dp.deal_id = d.id
-          JOIN facebook_leads fl
-            ON fl.phone_norm
-             = dp.phone_norm
-          WHERE d.lead_id IS NULL
-            AND d.uf_bp_sale_date >= $1::date AND d.uf_bp_sale_date <= $2::date
-          UNION
-          -- Path C: the deal card's own UTM (adset = utm_content, campaign =
-          -- utm_campaign), for deals A and B cannot see: no lead (or a lead with
-          -- no campaign) and no phone to match a form lead, e.g. a returning
-          -- customer's new deal. NOT EXISTS mirrors Path B so a deal is not
-          -- counted twice.
-          SELECT d.id, d.utm_content AS adset_name, d.utm_campaign AS campaign_name,
-                 CASE WHEN d.currency_id = 'USD' THEN COALESCE(d.opportunity, 0) ELSE 0 END AS opp
-          FROM deals d
-          JOIN stages ds ON ds.id = d.stage_id AND ds.is_won = true
-          LEFT JOIN leads le ON le.id = d.lead_id
-          WHERE NULLIF(d.utm_campaign, '') IS NOT NULL
-            AND NULLIF(d.utm_content, '') IS NOT NULL
-            AND (d.lead_id IS NULL OR COALESCE(le.utm_campaign, '') = '')
-            AND NOT EXISTS (
-              SELECT 1 FROM deal_phones dp
-              JOIN facebook_leads fl ON fl.phone_norm = dp.phone_norm
-              WHERE dp.deal_id = d.id AND d.lead_id IS NULL
-            )
-            AND d.uf_bp_sale_date >= $1::date AND d.uf_bp_sale_date <= $2::date
-        )
-        SELECT adset_name, campaign_name,
-               COUNT(DISTINCT id)::int AS sotuv_boldi,
-               SUM(opp)::numeric       AS sotuv_sum
-        FROM deduped GROUP BY adset_name, campaign_name
-      `, [sotuvFrom, sotuvTo]);
-      for (const row of sotuvRows) {
-        sotuvByAdset[`${row.adset_name ?? 'N/A'}|${row.campaign_name ?? 'N/A'}`] = { cnt: row.sotuv_boldi, sum: parseFloat(row.sotuv_sum) || 0 };
-      }
+    // 1b. Sales: each won deal is credited to ONE creative row (services/creativeSales.js), so the
+    // rows add up to the real number of sales instead of repeating an adset's sales on every ad.
+    const salesByRow = new Map();
+    for (const sale of await attributedSales(pool, { since, until, sotuvFrom, sotuvTo })) {
+      const k = rowKey(sale.adset_name, sale.campaign_name, sale.row_ad_id);
+      const cur = salesByRow.get(k) || { cnt: 0, sum: 0 };
+      cur.cnt++;
+      cur.sum += parseFloat(sale.opp_usd) || 0;
+      salesByRow.set(k, cur);
     }
+    // A key is handed out once: two rows of the same ad id (a renamed ad) must not both show the sale
+    const takeSales = (adsetName, campaignName, adId) => {
+      const k = rowKey(adsetName, campaignName, adId);
+      const v = salesByRow.get(k);
+      salesByRow.delete(k);
+      return v || { cnt: 0, sum: 0 };
+    };
 
     // 2. Spend + hook/hold rate per adset+campaign from meta_ad_daily (date
     // range aware, not restricted to campaigns created within the selected
@@ -1589,6 +1544,7 @@ router.get('/creatives', async (req, res) => {
     );
 
     const result = qualRows.map(r => {
+      const sales = takeSales(r.adset_name, r.campaign_name, r.ad_id);
       const cr = creativeMap[r.ad_id] || {};
       const displayName = cr.video_title || cr.creative_name || r.ad_name || null;
       const adMetric = adMetrics.get(r.ad_id);
@@ -1618,8 +1574,8 @@ router.get('/creatives', async (req, res) => {
       sifatsiz:           r.sifatsiz,
       bekor_boldi:        r.bekor_boldi,
       konsultatsiya_otdi: r.konsultatsiya_otdi,
-      sotuv_boldi:        sotuvByAdset[`${r.adset_name}|${r.campaign_name}`]?.cnt ?? 0,
-      sotuv_sum:          sotuvByAdset[`${r.adset_name}|${r.campaign_name}`]?.sum ?? 0,
+      sotuv_boldi:        sales.cnt,
+      sotuv_sum:          sales.sum,
       sifat_rate:    r.in_bitrix > 0
         ? Math.round((r.sifatli / r.in_bitrix) * 100)
         : 0,
@@ -1660,9 +1616,11 @@ router.get('/creatives', async (req, res) => {
   }
 });
 
-// ── /creative-deals — won deals for a specific adset (for sotuv_boldi drill-down) ─
+// ── /creative-deals — the won deals counted in a creative row's sotuv_boldi ───
+// Same attribution as /creatives (services/creativeSales.js): with ad_id it lists the
+// deals of that creative row, without it all deals of the adset (or campaign).
 router.get('/creative-deals', async (req, res) => {
-  const { adset_name, campaign_name, month, year } = req.query;
+  const { adset_name, campaign_name, ad_id, month, year } = req.query;
   if (!adset_name && !campaign_name) return res.status(400).json({ error: 'adset_name or campaign_name required' });
 
   const now = new Date();
@@ -1674,112 +1632,19 @@ router.get('/creative-deals', async (req, res) => {
   const days = new Date(yearNum, monthNum, 0).getDate();
   const since = req.query.from || `${yearNum}-${pad(monthNum)}-01`;
   const until = req.query.to   || `${yearNum}-${pad(monthNum)}-${pad(days)}`;
-  const hasSeparateSotuv = !!(req.query.sotuv_from || req.query.sotuv_to);
   const sotuvFrom = req.query.sotuv_from || since;
   const sotuvTo   = req.query.sotuv_to   || until;
 
   try {
-    // When sotuv dates are separate, skip the fl.created_time filter so we can
-    // show deals sold in the sotuv period regardless of when the lead arrived.
-    const { rows } = hasSeparateSotuv
-      ? await pool.query(`
-          SELECT DISTINCT ON (d.id)
-            d.id,
-            fl.phone,
-            r.name || ' ' || COALESCE(r.last_name, '') AS responsible,
-            d.opportunity,
-            d.currency_id,
-            d.date_create,
-            s.name AS stage_name
-          FROM facebook_leads fl
-          JOIN deal_phones dp
-            ON dp.phone_norm
-             = fl.phone_norm
-          JOIN deals  d  ON d.id = dp.deal_id
-          JOIN stages ds ON ds.id = d.stage_id AND ds.is_won = true
-          LEFT JOIN stages s ON s.id = d.stage_id
-          LEFT JOIN responsibles r ON r.id = d.responsible_id
-          WHERE d.uf_bp_sale_date >= $1::date
-            AND d.uf_bp_sale_date <= $2::date
-            ${adset_name ? "AND fl.adset_name = $3" : "AND fl.campaign_name = $3"}
-          ORDER BY d.id, d.date_create DESC
-        `, [sotuvFrom, sotuvTo, adset_name || campaign_name])
-      : await pool.query(`
-          SELECT DISTINCT ON (d.id)
-            d.id,
-            fl.phone,
-            r.name || ' ' || COALESCE(r.last_name, '') AS responsible,
-            d.opportunity,
-            d.currency_id,
-            d.date_create,
-            s.name AS stage_name
-          FROM facebook_leads fl
-          JOIN deal_phones dp
-            ON dp.phone_norm
-             = fl.phone_norm
-          JOIN deals  d  ON d.id = dp.deal_id
-          JOIN stages ds ON ds.id = d.stage_id AND ds.is_won = true
-          LEFT JOIN stages s ON s.id = d.stage_id
-          LEFT JOIN responsibles r ON r.id = d.responsible_id
-          WHERE (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date >= $1::date
-            AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date <= $2::date
-            AND d.uf_bp_sale_date >= $3::date
-            AND d.uf_bp_sale_date <= $4::date
-            ${adset_name ? "AND fl.adset_name = $5" : "AND fl.campaign_name = $5"}
-          ORDER BY d.id, d.date_create DESC
-        `, [since, until, sotuvFrom, sotuvTo, adset_name || campaign_name]);
-
-    // The query above only follows deal_phones, so a deal linked through its
-    // lead (Path A of the /creatives sotuv count) never reached this list and
-    // the drill-down showed fewer deals than the number it opens from.
-    const { rows: viaLeadRows } = await pool.query(`
-      SELECT DISTINCT ON (d.id)
-             d.id, fl.phone,
-             r.name || ' ' || COALESCE(r.last_name, '') AS responsible,
-             d.opportunity, d.currency_id, d.date_create, s.name AS stage_name
-      FROM deals d
-      JOIN stages ds ON ds.id = d.stage_id AND ds.is_won = true
-      JOIN leads le ON le.id = d.lead_id
-      JOIN lead_phones lp ON lp.lead_id = le.id
-      JOIN facebook_leads fl ON fl.phone_norm = lp.phone_norm AND fl.campaign_name = le.utm_campaign
-      LEFT JOIN stages s ON s.id = d.stage_id
-      LEFT JOIN responsibles r ON r.id = d.responsible_id
-      WHERE ${adset_name ? 'fl.adset_name' : 'fl.campaign_name'} = $1
-        AND d.uf_bp_sale_date >= $2::date AND d.uf_bp_sale_date <= $3::date
-      ORDER BY d.id, d.date_create DESC
-    `, [adset_name || campaign_name, sotuvFrom, sotuvTo]);
-
-    // Path C (same rule as /creatives' sotuv count): won deals with no lead and
-    // no phone to match a form lead, attributed by the deal card's own UTM.
-    const { rows: ownUtmRows } = await pool.query(`
-      SELECT d.id, NULL::text AS phone,
-             r.name || ' ' || COALESCE(r.last_name, '') AS responsible,
-             d.opportunity, d.currency_id, d.date_create, s.name AS stage_name
-      FROM deals d
-      JOIN stages ds ON ds.id = d.stage_id AND ds.is_won = true
-      LEFT JOIN leads le ON le.id = d.lead_id
-      LEFT JOIN stages s ON s.id = d.stage_id
-      LEFT JOIN responsibles r ON r.id = d.responsible_id
-      WHERE ${adset_name ? 'd.utm_content' : 'd.utm_campaign'} = $1
-        AND NULLIF(d.utm_campaign, '') IS NOT NULL
-        AND (d.lead_id IS NULL OR COALESCE(le.utm_campaign, '') = '')
-        AND NOT EXISTS (
-          SELECT 1 FROM deal_phones dp
-          JOIN facebook_leads fl ON fl.phone_norm = dp.phone_norm
-          WHERE dp.deal_id = d.id AND d.lead_id IS NULL
-        )
-        AND d.uf_bp_sale_date >= $2::date AND d.uf_bp_sale_date <= $3::date
-    `, [adset_name || campaign_name, sotuvFrom, sotuvTo]);
-    const listed = new Set(rows.map(r => r.id));
-    for (const r of [...viaLeadRows, ...ownUtmRows]) {
-      if (listed.has(r.id)) continue;
-      listed.add(r.id);
-      rows.push(r);
-    }
+    const sales = await attributedSales(pool, { since, until, sotuvFrom, sotuvTo });
+    const rows = sales.filter(s =>
+      (!adset_name    || s.adset_name === adset_name) &&
+      (!campaign_name || s.campaign_name === campaign_name) &&
+      (!ad_id         || s.row_ad_id === ad_id));
 
     res.json({
       deals: rows.map(r => ({
-        id:          r.id,
+        id:          r.deal_id,
         phone:       r.phone || '—',
         responsible: r.responsible?.trim() || '—',
         opportunity: parseFloat(r.opportunity) || 0,

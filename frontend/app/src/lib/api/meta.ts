@@ -382,11 +382,13 @@ export type CreativeDeal = {
   stage:       string;
 };
 
-export function getCreativeDeals(adset_name: string, month: MonthKey, year: number, from?: string, to?: string, sotuvFrom?: string, sotuvTo?: string) {
+export function getCreativeDeals(adset_name: string, month: MonthKey, year: number, from?: string, to?: string, sotuvFrom?: string, sotuvTo?: string, row?: { adId?: string | null; campaignName?: string }) {
   return apiGet<{ deals: CreativeDeal[] }>(
     '/api/campaigns/creative-deals',
     {
       adset_name, month, year,
+      ...(row?.adId        ? { ad_id: row.adId }                 : {}),
+      ...(row?.campaignName ? { campaign_name: row.campaignName } : {}),
       ...(from      ? { from }               : {}),
       ...(to        ? { to }                 : {}),
       ...(sotuvFrom ? { sotuv_from: sotuvFrom } : {}),

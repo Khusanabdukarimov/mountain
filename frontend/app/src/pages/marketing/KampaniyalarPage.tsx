@@ -163,14 +163,14 @@ function CreativeLeadsPanel({ adsetName, adId, campaignName, month, year, from, 
   );
 }
 
-function SotuvDealsPanel({ adsetName, month, year, from, to, sotuvFrom, sotuvTo }: { adsetName: string; month: MonthKey; year: number; from: string; to: string; sotuvFrom?: string; sotuvTo?: string }) {
+function SotuvDealsPanel({ adsetName, adId, campaignName, month, year, from, to, sotuvFrom, sotuvTo }: { adsetName: string; adId?: string | null; campaignName?: string; month: MonthKey; year: number; from: string; to: string; sotuvFrom?: string; sotuvTo?: string }) {
   const q = useQuery({
-    queryKey: ["creative-deals", adsetName, month, year, from, to, sotuvFrom, sotuvTo],
-    queryFn: () => getCreativeDeals(adsetName, month, year, from, to, sotuvFrom, sotuvTo),
+    queryKey: ["creative-deals", adsetName, adId, campaignName, month, year, from, to, sotuvFrom, sotuvTo],
+    queryFn: () => getCreativeDeals(adsetName, month, year, from, to, sotuvFrom, sotuvTo, { adId, campaignName }),
     staleTime: 2 * 60_000,
   });
   if (q.isLoading) return <tr><td colSpan={10} className="px-6 py-4"><div className="space-y-2">{Array.from({ length: 2 }).map((_, i) => <Skeleton key={i} className="h-3 w-full" />)}</div></td></tr>;
-  if (!q.data?.deals?.length) return <tr><td colSpan={10} className="px-6 py-4 text-[12px] text-text3 italic">Bu adset uchun sotuv sdelkalari topilmadi</td></tr>;
+  if (!q.data?.deals?.length) return <tr><td colSpan={10} className="px-6 py-4 text-[12px] text-text3 italic">Bu creative uchun sotuv sdelkalari topilmadi</td></tr>;
   return (
     <tr><td colSpan={10} className="p-0">
       <div className="border-t border-border/40 bg-[#22c55e]/5">
@@ -1426,7 +1426,7 @@ export default function KampaniyalarPage() {
                                 <td className={TD}><SifatBar rate={r.sifat_rate} /></td>
                               </tr>
                               {isExpAd    && <CreativeLeadsPanel key={`panel-${adKey}`} adsetName={r.adset_name} adId={r.ad_id} campaignName={r.campaign_name} month={month} year={year} from={fromDate} to={toDate} />}
-                              {isExpSotuv && <SotuvDealsPanel    key={`sotuv-${adKey}`} adsetName={r.adset_name} month={month} year={year} from={fromDate} to={toDate} />}
+                              {isExpSotuv && <SotuvDealsPanel    key={`sotuv-${adKey}`} adsetName={r.adset_name} adId={r.ad_id} campaignName={r.campaign_name} month={month} year={year} from={fromDate} to={toDate} />}
                             </>
                           );
                         })}
