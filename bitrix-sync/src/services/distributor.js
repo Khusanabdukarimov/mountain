@@ -1,6 +1,7 @@
 const pool = require('../db/pool');
 const { bitrixCall } = require('./bitrix');
 const { getStatus: getSubscriptionStatus } = require('../middleware/subscription');
+const { toLike, activeStreams, streamForTitle } = require('./taqsimotForms');
 
 /**
  * Distribute a new lead to the responsible with the largest deficit.
@@ -12,15 +13,19 @@ const { getStatus: getSubscriptionStatus } = require('../middleware/subscription
  * Uses pg_advisory_xact_lock to prevent race conditions when multiple
  * webhooks arrive simultaneously.
  *
+ * A lead whose title matches an active form stream (see taqsimotForms.js) is shared
+ * among that stream's members by their stream percentages; every other lead goes
+ * through the general pool.
+ *
  * @param {number} leadId
  * @returns {Promise<number|null>} responsible_id assigned, or null
  */
-async function distributeLead(leadId, campaignName = null) {
+async function distributeLead(leadId) {
   // Distribution is part of the subscription: once it has expired, new leads are
   // received and stored but not handed to operators (they stay on the main
   // account), and it resumes by itself when the subscription is extended — see
   // middleware/subscription.js and scripts/set_subscription.js. Every caller
-  // (leadCreated, leadUpdated's UTM re-route, the Facebook webhook) goes through here.
+  // (leadCreated, the Facebook webhook) goes through here.
   if ((await getSubscriptionStatus()).expired) {
     console.log(`[distributor] Lead ${leadId} NOT distributed: subscription expired, distribution is paused`);
     return null;
@@ -31,60 +36,51 @@ async function distributeLead(leadId, campaignName = null) {
     await client.query('BEGIN');
     await client.query('SELECT pg_advisory_xact_lock(12345)');
 
-    const { rows: leadRows } = await client.query(`
-      SELECT COALESCE(NULLIF(l.utm_campaign, ''), (
-        SELECT fl.campaign_name FROM facebook_leads fl
-        WHERE fl.bitrix_lead_id = l.id AND fl.campaign_name IS NOT NULL
-        ORDER BY fl.created_time DESC LIMIT 1
-      )) AS campaign_name
-      FROM leads l WHERE l.id = $1
-    `, [leadId]);
+    const { rows: leadRows } = await client.query('SELECT title FROM leads WHERE id = $1', [leadId]);
     if (!leadRows.length) {
       await client.query('ROLLBACK');
       return null;
     }
 
-    const { rows: settings } = await client.query(
-      'SELECT campaign_name FROM taqsimot_campaign_settings WHERE active = TRUE'
-    );
-    const activeNames = settings.map(s => s.campaign_name);
-    const leadCampaign = campaignName || leadRows[0].campaign_name;
-    const streamCampaign = activeNames.includes(leadCampaign) ? leadCampaign : null;
     const { rows: alreadyAssigned } = await client.query(
-      'SELECT responsible_id, campaign_name FROM taqsimot_assignments WHERE lead_id = $1', [leadId]
+      'SELECT responsible_id FROM taqsimot_assignments WHERE lead_id = $1', [leadId]
     );
-    // The native Bitrix connector can create and distribute a lead before Meta
-    // supplies its campaign. Re-route only that lead when its UTM is patched.
-    if (alreadyAssigned.length && !(streamCampaign && alreadyAssigned[0].campaign_name !== streamCampaign)) {
+    if (alreadyAssigned.length) {
       await client.query('COMMIT');
       return Number(alreadyAssigned[0].responsible_id);
     }
-    const streamFilter = streamCampaign
-      ? `AND (l.utm_campaign = $1 OR (NULLIF(l.utm_campaign, '') IS NULL AND EXISTS (
-           SELECT 1 FROM facebook_leads fl WHERE fl.bitrix_lead_id = l.id AND fl.campaign_name = $1)))`
-      : `AND NOT COALESCE(l.utm_campaign = ANY($1::text[]), FALSE)
-         AND NOT (NULLIF(l.utm_campaign, '') IS NULL AND EXISTS (
-           SELECT 1 FROM facebook_leads fl WHERE fl.bitrix_lead_id = l.id AND fl.campaign_name = ANY($1::text[])))`;
+
+    const streams = await activeStreams(client);
+    const stream = await streamForTitle(client, leadRows[0].title, streams);
+    const streamLike = stream ? toLike(stream) : null;
+    // Who counts as "already got a lead today": for a stream, leads of that stream (by title, or
+    // recorded as assigned to it — so a manager renaming the title does not unbalance it); for the
+    // general pool, every lead that belongs to no active stream.
+    const streamFilter = stream
+      ? `AND (l.title ILIKE $2 OR EXISTS (
+           SELECT 1 FROM taqsimot_assignments a WHERE a.lead_id = l.id AND a.campaign_name = $1))`
+      : `AND NOT (l.title ILIKE ANY($2::text[]))
+         AND NOT EXISTS (SELECT 1 FROM taqsimot_assignments a WHERE a.lead_id = l.id AND a.campaign_name = ANY($1::text[]))`;
 
     const { rows: distributors } = await client.query(`
       SELECT
         r.id,
         r.name,
-        ${streamCampaign ? 'COALESCE(m.pct, 0)' : 'r.taqsimot_pct'} AS taqsimot_pct,
+        ${stream ? 'COALESCE(m.pct, 0)' : 'r.taqsimot_pct'} AS taqsimot_pct,
         COUNT(l.id)::int AS today_count
       FROM responsibles r
-      ${streamCampaign ? 'LEFT JOIN taqsimot_campaign_members m ON m.responsible_id = r.id AND m.campaign_name = $1' : ''}
+      ${stream ? 'LEFT JOIN taqsimot_form_members m ON m.responsible_id = r.id AND m.form_pattern = $1' : ''}
       LEFT JOIN leads l ON l.responsible_id = r.id
         AND l.date_create >= date_trunc('day', NOW() AT TIME ZONE 'Asia/Tashkent') AT TIME ZONE 'Asia/Tashkent'
         AND (l.source_id IS NULL OR l.source_id != 'UC_1WUFJB')
         ${streamFilter}
-      WHERE ${streamCampaign ? 'COALESCE(m.pct, 0)' : 'r.taqsimot_pct'} > 0
-        ${streamCampaign ? '' : 'AND r.taqsimot_pct > 0'}
-        ${streamCampaign ? '' : 'AND r.id IN (SELECT responsible_id FROM taqsimot_members)'}
+      WHERE ${stream ? 'COALESCE(m.pct, 0)' : 'r.taqsimot_pct'} > 0
+        ${stream ? '' : 'AND r.taqsimot_pct > 0'}
+        ${stream ? '' : 'AND r.id IN (SELECT responsible_id FROM taqsimot_members)'}
         AND r.active = TRUE
-      GROUP BY r.id, r.name${streamCampaign ? ', m.pct' : ', r.taqsimot_pct'}
+      GROUP BY r.id, r.name${stream ? ', m.pct' : ', r.taqsimot_pct'}
       ORDER BY r.id
-    `, [streamCampaign || activeNames]);
+    `, stream ? [stream, streamLike] : [streams.patterns, streams.likes]);
 
     if (distributors.length === 0) {
       await client.query('ROLLBACK');
@@ -117,12 +113,13 @@ async function distributeLead(leadId, campaignName = null) {
       'UPDATE leads SET responsible_id = $1 WHERE id = $2',
       [bestId, leadId]
     );
+    // (the column is still called campaign_name; it now holds the form stream, NULL for the general pool)
     await client.query(
       `INSERT INTO taqsimot_assignments (lead_id, responsible_id, campaign_name)
        VALUES ($1, $2, $3)
        ON CONFLICT (lead_id) DO UPDATE SET responsible_id = EXCLUDED.responsible_id,
                                       campaign_name = EXCLUDED.campaign_name, assigned_at = NOW()`,
-      [leadId, bestId, streamCampaign]
+      [leadId, bestId, stream]
     );
 
     await client.query('COMMIT');
@@ -135,7 +132,7 @@ async function distributeLead(leadId, campaignName = null) {
       console.error(`[distributor] Bitrix update failed for lead ${leadId}:`, err.message);
     });
 
-    console.log(`[distributor] Lead ${leadId} → ${bestName} (id=${bestId}), stream=${streamCampaign || 'general'}, deficit=${maxDeficit.toFixed(2)}`);
+    console.log(`[distributor] Lead ${leadId} → ${bestName} (id=${bestId}), stream=${stream || 'general'}, deficit=${maxDeficit.toFixed(2)}`);
     return bestId;
 
   } catch (err) {

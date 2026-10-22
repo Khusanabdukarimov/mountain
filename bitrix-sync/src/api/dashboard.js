@@ -2,7 +2,8 @@ const { Router } = require('express');
 const pool = require('../db/pool');
 const fs = require('fs');
 const path = require('path');
-const { CAMPAIGN_NAME } = require('../services/distributionCampaign');
+const { toLike, cleanPattern, activeStreams } = require('../services/taqsimotForms');
+const { FORMS: LEAD_FORMS } = require('../services/facebookLeadCreator');
 
 const router = Router();
 
@@ -1223,7 +1224,7 @@ router.get('/taqsimot', async (_req, res) => {
 });
 
 router.get('/taqsimot-candidates', async (req, res) => {
-  const name = typeof req.query.campaign_name === 'string' ? req.query.campaign_name : '';
+  const name = typeof req.query.form_name === 'string' ? req.query.form_name : '';
   try {
     const { rows } = await pool.query(`
       SELECT r.id, TRIM(COALESCE(r.name,'') || ' ' || COALESCE(r.last_name,'')) AS full_name,
@@ -1232,8 +1233,8 @@ router.get('/taqsimot-candidates', async (req, res) => {
         AND NOT EXISTS (
           SELECT 1 FROM taqsimot_members m WHERE $1 = '' AND m.responsible_id = r.id
           UNION ALL
-          SELECT 1 FROM taqsimot_campaign_members m
-          WHERE $1 <> '' AND m.campaign_name = $1 AND m.responsible_id = r.id
+          SELECT 1 FROM taqsimot_form_members m
+          WHERE $1 <> '' AND m.form_pattern = $1 AND m.responsible_id = r.id
         )
       ORDER BY r.name
     `, [name]);
@@ -1309,143 +1310,148 @@ router.put('/taqsimot/:id', async (req, res) => {
   }
 });
 
-router.get('/taqsimot-campaigns', async (_req, res) => {
+// ── Form streams ───────────────────────────────────────────────────────────
+// A stream is a form name matched against the lead title with ILIKE (see
+// services/taqsimotForms.js): "DU - Proten" takes every lead whose title contains it.
+
+router.get('/taqsimot-forms', async (_req, res) => {
   try {
-    const { rows } = await pool.query('SELECT campaign_name, active FROM taqsimot_campaign_settings ORDER BY campaign_name');
-    res.json({ campaigns: rows });
+    const { rows } = await pool.query('SELECT form_pattern AS form_name, active FROM taqsimot_form_settings ORDER BY form_pattern');
+    res.json({ forms: rows });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/taqsimot-campaign-memberships', async (_req, res) => {
+router.get('/taqsimot-form-memberships', async (_req, res) => {
   try {
     const { rows } = await pool.query(`
-      SELECT m.responsible_id, m.campaign_name, m.pct::float AS pct
-      FROM taqsimot_campaign_members m
+      SELECT m.responsible_id, m.form_pattern AS form_name, m.pct::float AS pct
+      FROM taqsimot_form_members m
       JOIN responsibles r ON r.id = m.responsible_id
-      WHERE r.active = TRUE ORDER BY m.campaign_name
+      WHERE r.active = TRUE ORDER BY m.form_pattern
     `);
     res.json({ memberships: rows });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/taqsimot-campaign-options', async (_req, res) => {
+// Suggestions for the form picker: the forms Bitrix's connector made leads for (its
+// titles are `Заполнение CRM-формы "<form name>"`) plus the forms we create leads for.
+router.get('/taqsimot-form-options', async (_req, res) => {
   try {
     const { rows } = await pool.query(`
-      SELECT DISTINCT campaign_name FROM (
-        SELECT campaign_name FROM meta_ad_daily WHERE date >= CURRENT_DATE - INTERVAL '90 days'
-        UNION SELECT campaign_name FROM facebook_leads WHERE created_time >= NOW() - INTERVAL '90 days'
-        UNION SELECT utm_campaign AS campaign_name FROM leads WHERE date_create >= NOW() - INTERVAL '90 days'
-      ) names WHERE campaign_name IS NOT NULL AND campaign_name <> '' ORDER BY campaign_name
+      SELECT DISTINCT substring(title FROM '^Заполнение CRM-формы "(.*)"$') AS form_name
+      FROM leads
+      WHERE date_create >= NOW() - INTERVAL '90 days' AND title LIKE 'Заполнение CRM-формы "%'
     `);
-    res.json({ campaigns: rows.map(r => r.campaign_name) });
+    const names = new Set(rows.map(r => r.form_name).filter(Boolean));
+    for (const f of Object.values(LEAD_FORMS)) names.add(f.title);
+    res.json({ forms: [...names].sort((a, b) => a.localeCompare(b)) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.post('/taqsimot-campaigns', async (req, res) => {
-  const name = typeof req.body?.campaign_name === 'string' ? req.body.campaign_name.trim() : '';
-  if (!name || name.length > 500) return res.status(400).json({ error: 'Campaign nomini tanlang' });
+router.post('/taqsimot-forms', async (req, res) => {
+  const name = cleanPattern(req.body?.form_name);
+  if (!name) return res.status(400).json({ error: 'Forma nomini kiriting (200 belgigacha)' });
   try {
-    const { rows } = await pool.query(`
-      INSERT INTO taqsimot_campaign_settings (campaign_name, active)
-      SELECT $1, FALSE WHERE EXISTS (
-        SELECT 1 FROM meta_ad_daily WHERE campaign_name = $1
-        UNION SELECT 1 FROM facebook_leads WHERE campaign_name = $1
-        UNION SELECT 1 FROM leads WHERE utm_campaign = $1
-      ) ON CONFLICT DO NOTHING RETURNING campaign_name
-    `, [name]);
-    if (!rows.length) return res.status(400).json({ error: 'Campaign topilmadi yoki allaqachon qo‘shilgan' });
-    res.status(201).json({ campaign_name: name, active: false });
+    const { rows } = await pool.query(
+      'INSERT INTO taqsimot_form_settings (form_pattern, active) VALUES ($1, FALSE) ON CONFLICT DO NOTHING RETURNING form_pattern',
+      [name]);
+    if (!rows.length) return res.status(400).json({ error: 'Bu forma allaqachon qo‘shilgan' });
+    res.status(201).json({ form_name: name, active: false });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.get('/taqsimot-campaign', async (req, res) => {
-  const name = String(req.query.campaign_name || CAMPAIGN_NAME);
+router.get('/taqsimot-form', async (req, res) => {
+  const name = cleanPattern(req.query.form_name);
+  if (!name) return res.status(400).json({ error: 'form_name kerak' });
   try {
-    const [setting, responsibles] = await Promise.all([
-      pool.query('SELECT active FROM taqsimot_campaign_settings WHERE campaign_name = $1', [name]),
+    const [setting, responsibles, matches] = await Promise.all([
+      pool.query('SELECT active FROM taqsimot_form_settings WHERE form_pattern = $1', [name]),
       pool.query(`SELECT r.id, TRIM(COALESCE(r.name,'') || ' ' || COALESCE(r.last_name,'')) AS full_name,
                          r.work_position, COALESCE(m.pct, 0)::float AS pct,
                          (m.responsible_id IS NOT NULL) AS attached
-                  FROM responsibles r LEFT JOIN taqsimot_campaign_members m
-                    ON m.responsible_id = r.id AND m.campaign_name = $1
+                  FROM responsibles r LEFT JOIN taqsimot_form_members m
+                    ON m.responsible_id = r.id AND m.form_pattern = $1
                   WHERE r.active = TRUE AND (m.responsible_id IS NOT NULL
                     OR r.id IN (SELECT responsible_id FROM taqsimot_members))
                   ORDER BY r.name`, [name]),
+      pool.query(`SELECT COUNT(*)::int AS n FROM leads
+                  WHERE title ILIKE $1 AND date_create >= NOW() - INTERVAL '30 days'`, [toLike(name)]),
     ]);
-    if (!setting.rows.length) return res.status(404).json({ error: 'Campaign topilmadi' });
-    res.json({ campaign_name: name, active: setting.rows[0].active === true,
-               responsibles: responsibles.rows });
+    if (!setting.rows.length) return res.status(404).json({ error: 'Forma topilmadi' });
+    res.json({ form_name: name, active: setting.rows[0].active === true,
+               matches_30d: matches.rows[0].n, responsibles: responsibles.rows });
   } catch (err) {
-    console.error('[dashboard/taqsimot-campaign GET]', err.message);
+    console.error('[dashboard/taqsimot-form GET]', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-router.post('/taqsimot-campaign-members', async (req, res) => {
-  const name = typeof req.body?.campaign_name === 'string' ? req.body.campaign_name : '';
+router.post('/taqsimot-form-members', async (req, res) => {
+  const name = cleanPattern(req.body?.form_name);
   const id = Number(req.body?.responsible_id);
   const pct = Number(req.body?.pct);
   if (!name || !Number.isInteger(id) || id <= 0 || !Number.isFinite(pct) || pct < 0 || pct > 100) {
-    return res.status(400).json({ error: 'Campaign, mas’ul yoki foiz noto‘g‘ri' });
+    return res.status(400).json({ error: 'Forma, mas’ul yoki foiz noto‘g‘ri' });
   }
   try {
     const { rows } = await pool.query(`
-      INSERT INTO taqsimot_campaign_members (campaign_name, responsible_id, pct)
+      INSERT INTO taqsimot_form_members (form_pattern, responsible_id, pct)
       SELECT $1, r.id, $3 FROM responsibles r
       WHERE r.id = $2 AND r.active = TRUE
-        AND EXISTS (SELECT 1 FROM taqsimot_campaign_settings WHERE campaign_name = $1)
+        AND EXISTS (SELECT 1 FROM taqsimot_form_settings WHERE form_pattern = $1)
       ON CONFLICT DO NOTHING RETURNING responsible_id
     `, [name, id, pct]);
-    if (!rows.length) return res.status(409).json({ error: 'Mas’ul topilmadi yoki campaignga allaqachon qo‘shilgan' });
+    if (!rows.length) return res.status(409).json({ error: 'Mas’ul topilmadi yoki formaga allaqachon qo‘shilgan' });
     res.status(201).json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-router.put('/taqsimot-campaign/:id', async (req, res) => {
+router.put('/taqsimot-form/:id', async (req, res) => {
   const id = Number(req.params.id);
   const pct = Number(req.body?.pct);
-  if (!Number.isInteger(id) || id <= 0 || !Number.isFinite(pct) || pct < 0 || pct > 100) {
-    return res.status(400).json({ error: 'Invalid responsible id or percentage' });
+  const name = cleanPattern(req.body?.form_name);
+  if (!name || !Number.isInteger(id) || id <= 0 || !Number.isFinite(pct) || pct < 0 || pct > 100) {
+    return res.status(400).json({ error: 'Invalid form, responsible id or percentage' });
   }
-  const name = String(req.body?.campaign_name || CAMPAIGN_NAME);
   try {
     const { rowCount } = await pool.query(`
-      UPDATE taqsimot_campaign_members m SET pct = $3
-      FROM responsibles r WHERE m.campaign_name = $1 AND m.responsible_id = $2
+      UPDATE taqsimot_form_members m SET pct = $3
+      FROM responsibles r WHERE m.form_pattern = $1 AND m.responsible_id = $2
         AND r.id = m.responsible_id AND r.active = TRUE
     `, [name, id, pct]);
-    if (!rowCount) return res.status(404).json({ error: 'Campaign yoki operator topilmadi' });
+    if (!rowCount) return res.status(404).json({ error: 'Forma yoki operator topilmadi' });
     res.json({ ok: true });
   } catch (err) {
-    console.error('[dashboard/taqsimot-campaign PUT]', err.message);
+    console.error('[dashboard/taqsimot-form PUT]', err.message);
     res.status(500).json({ error: err.message });
   }
 });
 
-router.put('/taqsimot-campaign', async (req, res) => {
+router.put('/taqsimot-form', async (req, res) => {
   if (typeof req.body?.active !== 'boolean') {
     return res.status(400).json({ error: 'active must be boolean' });
   }
-  const name = String(req.body?.campaign_name || CAMPAIGN_NAME);
+  const name = cleanPattern(req.body?.form_name);
+  if (!name) return res.status(400).json({ error: 'form_name kerak' });
   try {
     if (req.body.active) {
       const { rows } = await pool.query(
-        `SELECT COALESCE(SUM(m.pct), 0)::float AS total FROM taqsimot_campaign_members m
+        `SELECT COALESCE(SUM(m.pct), 0)::float AS total FROM taqsimot_form_members m
          JOIN responsibles r ON r.id = m.responsible_id
-         WHERE m.campaign_name = $1 AND r.active = TRUE`, [name]
+         WHERE m.form_pattern = $1 AND r.active = TRUE`, [name]
       );
       if (Math.abs(rows[0].total - 100) > 0.001) {
-        return res.status(400).json({ error: `Campaign foizlari 100% bo'lishi kerak (hozir ${rows[0].total}%)` });
+        return res.status(400).json({ error: `Forma foizlari 100% bo'lishi kerak (hozir ${rows[0].total}%)` });
       }
     }
     const { rowCount } = await pool.query(
-      'UPDATE taqsimot_campaign_settings SET active = $1 WHERE campaign_name = $2',
+      'UPDATE taqsimot_form_settings SET active = $1 WHERE form_pattern = $2',
       [req.body.active, name]
     );
-    if (!rowCount) return res.status(404).json({ error: 'Campaign topilmadi' });
+    if (!rowCount) return res.status(404).json({ error: 'Forma topilmadi' });
     res.json({ ok: true, active: req.body.active });
   } catch (err) {
-    console.error('[dashboard/taqsimot-campaign active PUT]', err.message);
+    console.error('[dashboard/taqsimot-form active PUT]', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1456,10 +1462,7 @@ router.put('/taqsimot-campaign', async (req, res) => {
  */
 router.get('/taqsimot-stats', async (_req, res) => {
   try {
-    const { rows: settings } = await pool.query(
-      'SELECT campaign_name FROM taqsimot_campaign_settings WHERE active = TRUE'
-    );
-    const activeNames = settings.map(s => s.campaign_name);
+    const { patterns, likes } = await activeStreams(pool);
     const { rows } = await pool.query(`
       SELECT
         r.id,
@@ -1479,16 +1482,14 @@ router.get('/taqsimot-stats', async (_req, res) => {
         AND l.date_create >= date_trunc('day', NOW() AT TIME ZONE 'Asia/Tashkent') AT TIME ZONE 'Asia/Tashkent'
         AND (l.source_id IS NULL OR l.source_id != 'UC_1WUFJB')
         AND (array_length($1::text[], 1) IS NULL OR (
-          NOT COALESCE(l.utm_campaign = ANY($1::text[]), FALSE)
-          AND NOT (NULLIF(l.utm_campaign, '') IS NULL AND EXISTS (
-            SELECT 1 FROM facebook_leads fl WHERE fl.bitrix_lead_id = l.id AND fl.campaign_name = ANY($1::text[])
-          ))
+          NOT (l.title ILIKE ANY($2::text[]))
+          AND NOT EXISTS (SELECT 1 FROM taqsimot_assignments a WHERE a.lead_id = l.id AND a.campaign_name = ANY($1::text[]))
         ))
       WHERE r.taqsimot_pct > 0 AND r.active = TRUE
         AND r.id IN (SELECT responsible_id FROM taqsimot_members)
       GROUP BY r.id, r.name, r.last_name, r.taqsimot_pct
       ORDER BY r.taqsimot_pct DESC
-    `, [activeNames]);
+    `, [patterns, likes]);
     res.json({ stats: rows, date: new Date().toISOString() });
   } catch (err) {
     console.error('[dashboard/taqsimot-stats]', err.message);
@@ -1496,8 +1497,9 @@ router.get('/taqsimot-stats', async (_req, res) => {
   }
 });
 
-router.get('/taqsimot-campaign-stats', async (req, res) => {
-  const name = String(req.query.campaign_name || CAMPAIGN_NAME);
+router.get('/taqsimot-form-stats', async (req, res) => {
+  const name = cleanPattern(req.query.form_name);
+  if (!name) return res.status(400).json({ error: 'form_name kerak' });
   try {
     const { rows } = await pool.query(`
       SELECT r.id,
@@ -1508,20 +1510,18 @@ router.get('/taqsimot-campaign-stats', async (req, res) => {
              ROUND(m.pct -
                    COUNT(l.id)::numeric / NULLIF(SUM(COUNT(l.id)) OVER(), 0) * 100, 1)::float AS deficit_pct
       FROM responsibles r
-      JOIN taqsimot_campaign_members m ON m.responsible_id = r.id AND m.campaign_name = $1
+      JOIN taqsimot_form_members m ON m.responsible_id = r.id AND m.form_pattern = $1
       LEFT JOIN leads l ON l.responsible_id = r.id
         AND l.date_create >= date_trunc('day', NOW() AT TIME ZONE 'Asia/Tashkent') AT TIME ZONE 'Asia/Tashkent'
         AND (l.source_id IS NULL OR l.source_id != 'UC_1WUFJB')
-        AND (l.utm_campaign = $1 OR (NULLIF(l.utm_campaign, '') IS NULL AND EXISTS (
-          SELECT 1 FROM facebook_leads fl WHERE fl.bitrix_lead_id = l.id AND fl.campaign_name = $1
-        )))
+        AND (l.title ILIKE $2 OR EXISTS (SELECT 1 FROM taqsimot_assignments a WHERE a.lead_id = l.id AND a.campaign_name = $1))
       WHERE m.pct > 0 AND r.active = TRUE
       GROUP BY r.id, r.name, r.last_name, m.pct
       ORDER BY m.pct DESC
-    `, [name]);
+    `, [name, toLike(name)]);
     res.json({ stats: rows, date: new Date().toISOString() });
   } catch (err) {
-    console.error('[dashboard/taqsimot-campaign-stats]', err.message);
+    console.error('[dashboard/taqsimot-form-stats]', err.message);
     res.status(500).json({ error: err.message });
   }
 });

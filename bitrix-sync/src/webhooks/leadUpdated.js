@@ -2,7 +2,6 @@ const pool = require('../db/pool');
 const { fetchOne } = require('../services/bitrix');
 const { upsertLead } = require('../services/upsertLead');
 const { sendQualifiedLead } = require('../services/metaConversions');
-const { distributeLead } = require('../services/distributor');
 
 async function fetchOneWithRetry(method, id, maxRetries = 3) {
   const delays = [5000, 15000, 45000];
@@ -48,26 +47,13 @@ async function leadUpdated(req, res) {
     );
 
     // Oldingi bosqichni saqlab qolamiz
-    const before = await pool.query('SELECT stage_id, utm_campaign FROM leads WHERE id = $1', [entityId]);
+    const before = await pool.query('SELECT stage_id FROM leads WHERE id = $1', [entityId]);
     const prevStageId = before.rows[0]?.stage_id || null;
-    const prevCampaign = before.rows[0]?.utm_campaign || null;
 
     const raw = await fetchOneWithRetry('crm.lead.get', entityId);
     if (!raw) return;
 
     await upsertLead(raw);
-
-    // Bitrix can create a lead before its campaign UTM arrives. Re-evaluate only
-    // when a newly saved UTM matches an active campaign; ordinary lead updates
-    // and the distributor's own ASSIGNED_BY_ID webhook must not re-route it.
-    const nextCampaign = raw.UTM_CAMPAIGN || null;
-    if (nextCampaign && nextCampaign !== prevCampaign) {
-      const { rows: activeCampaign } = await pool.query(
-        'SELECT 1 FROM taqsimot_campaign_settings WHERE campaign_name = $1 AND active = TRUE',
-        [nextCampaign]
-      );
-      if (activeCampaign.length) await distributeLead(entityId, nextCampaign);
-    }
 
     // Yangi bosqich
     const after = await pool.query(

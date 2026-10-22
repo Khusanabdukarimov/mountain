@@ -2,7 +2,6 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 
 const state = { campaign: null, rawCampaign: null, assignments: [] };
-const activeCampaigns = new Set(['Campaign A', 'Campaign B']);
 
 function mock(modulePath, exports) {
   require.cache[require.resolve(modulePath)] = {
@@ -14,12 +13,9 @@ function mock(modulePath, exports) {
 }
 
 mock('../src/db/pool', {
-  query: async (sql, params) => {
-    if (sql.includes('SELECT stage_id, utm_campaign FROM leads')) {
-      return { rows: [{ stage_id: null, utm_campaign: state.campaign }] };
-    }
-    if (sql.includes('SELECT 1 FROM taqsimot_campaign_settings')) {
-      return { rows: activeCampaigns.has(params[0]) ? [{ '?column?': 1 }] : [] };
+  query: async (sql) => {
+    if (sql.includes('SELECT stage_id FROM leads')) {
+      return { rows: [{ stage_id: null }] };
     }
     if (sql.includes('SELECT l.stage_id, s.bitrix_id')) return { rows: [] };
     return { rows: [] };
@@ -40,19 +36,11 @@ const leadUpdated = require('../src/webhooks/leadUpdated');
 const req = { body: { data: { FIELDS: { ID: '123' } } } };
 const res = { sendStatus: code => assert.equal(code, 200) };
 
-test('UTM update re-distributes only when campaign changes to an active campaign', async () => {
+test('a lead update, even one that changes the campaign UTM, never re-distributes the lead', async () => {
+  // streams are keyed by form name (the lead title, known at creation), so there is nothing to re-route
   state.rawCampaign = 'Campaign A';
   await leadUpdated(req, res);
-  assert.deepEqual(state.assignments, [[123, 'Campaign A']]);
-
-  await leadUpdated(req, res); // distributor/ordinary update echo
-  assert.equal(state.assignments.length, 1);
-
-  state.rawCampaign = 'Inactive campaign';
-  await leadUpdated(req, res);
-  assert.equal(state.assignments.length, 1);
-
   state.rawCampaign = 'Campaign B';
   await leadUpdated(req, res);
-  assert.deepEqual(state.assignments, [[123, 'Campaign A'], [123, 'Campaign B']]);
+  assert.deepEqual(state.assignments, []);
 });
