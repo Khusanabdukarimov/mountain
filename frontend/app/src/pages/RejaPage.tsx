@@ -52,6 +52,25 @@ function periodLabel(plan: RejaPlan): string {
 }
 
 
+const WEEKDAYS_UZ = ['Yakshanba', 'Dushanba', 'Seshanba', 'Chorshanba', 'Payshanba', 'Juma', 'Shanba'];
+
+function addDaysISO(iso: string, n: number): string {
+  const [y, m, d] = iso.slice(0, 10).split('-').map(Number);
+  const t = new Date(Date.UTC(y, m - 1, d + n));
+  return `${t.getUTCFullYear()}-${String(t.getUTCMonth() + 1).padStart(2, '0')}-${String(t.getUTCDate()).padStart(2, '0')}`;
+}
+
+function weekdayUz(iso: string): string {
+  const [y, m, d] = iso.slice(0, 10).split('-').map(Number);
+  return WEEKDAYS_UZ[new Date(Date.UTC(y, m - 1, d)).getUTCDay()];
+}
+
+/** "5 Okt" for a YYYY-MM-DD date. */
+function shortDate(iso: string): string {
+  const [, m, d] = iso.slice(0, 10).split('-').map(Number);
+  return `${d} ${MONTH_NAMES[m - 1].slice(0, 3)}`;
+}
+
 const AVATAR_COLORS = [
   '#2196F3','#E91E63','#9C27B0','#00BCD4','#FF9800',
   '#4CAF50','#FF5722','#3F51B5','#009688','#795548',
@@ -582,9 +601,17 @@ function DistributionView({ planId, onDeleted }: { planId: number; onDeleted: ()
 // ── Progress view ──────────────────────────────────────────────────
 
 function ProgressView({ planId }: { planId: number }) {
+  const qc = useQueryClient();
   const { data, isLoading } = useQuery({
     queryKey: ['reja/progress', planId],
     queryFn:  () => getRejaProgress(planId),
+  });
+  const weekStartMutation = useMutation({
+    mutationFn: (weekStart: string | null) => updateRejaPlan(planId, { week_start: weekStart }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['reja/progress', planId] });
+      qc.invalidateQueries({ queryKey: ['reja/plans'] });
+    },
   });
 
   if (isLoading) return <div style={{ padding: 40, textAlign: 'center', color: 'var(--text3)' }}>Yuklanmoqda…</div>;
@@ -598,7 +625,46 @@ function ProgressView({ planId }: { planId: number }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16, padding: '0 24px 96px' }}>
 
-      <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text)', paddingTop: 4 }}>Bajarilish jadvali</div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12, paddingTop: 4 }}>
+        <div style={{ fontSize: 16, fontWeight: 700, color: 'var(--text)' }}>Bajarilish jadvali</div>
+
+        {/* Week start: the weeks are counted from this date (monthly plans only) */}
+        {data.plan.period_type === 'monthly' && (() => {
+          const planStart = data.plan.period_start.slice(0, 10);
+          const planEnd   = data.plan.period_end.slice(0, 10);
+          // the weeks shown come from the server, so this is always the date that is really in effect
+          const weekStart = subperiods[1] ? addDaysISO(subperiods[1].start, -7) : planStart;
+          const custom    = !!data.plan.week_start;
+          return (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 12, color: 'var(--text3)' }}>Hafta boshlanishi</span>
+              <input
+                type="date"
+                value={weekStart}
+                min={addDaysISO(planStart, -6)}
+                max={addDaysISO(planEnd, -21)}
+                disabled={weekStartMutation.isPending}
+                onChange={e => { if (e.target.value) weekStartMutation.mutate(e.target.value === planStart ? null : e.target.value); }}
+                style={{ height: 34, padding: '0 10px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg)', color: 'var(--text)', fontSize: 13, fontWeight: 600, outline: 'none' }}
+              />
+              <span style={{ fontSize: 12, fontWeight: 600, color: 'var(--text2)', minWidth: 78 }}>{weekdayUz(weekStart)}</span>
+              {custom && (
+                <button
+                  onClick={() => weekStartMutation.mutate(null)}
+                  disabled={weekStartMutation.isPending}
+                  title="Hafta reja boshlanishidan hisoblansin"
+                  style={{ height: 34, padding: '0 12px', borderRadius: 8, border: '1px solid var(--border)', background: 'var(--bg2)', color: 'var(--text2)', fontSize: 12, cursor: 'pointer' }}
+                >
+                  Tiklash
+                </button>
+              )}
+              {weekStartMutation.isError && (
+                <span style={{ fontSize: 11.5, color: '#ef4444' }}>{(weekStartMutation.error as Error).message}</span>
+              )}
+            </div>
+          );
+        })()}
+      </div>
 
       {/* Per-employee table with sub-periods */}
       <div style={{ background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 14, overflow: 'hidden' }}>
@@ -609,7 +675,9 @@ function ProgressView({ planId }: { planId: number }) {
                 <th style={{ padding: '11px 14px', textAlign: 'left', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid var(--border)', position: 'sticky', left: 0, background: 'var(--bg2)', zIndex: 2, minWidth: 180 }}>Xodim</th>
                 <th style={{ padding: '11px 14px', textAlign: 'right', fontSize: 11, fontWeight: 700, color: '#2563eb', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid var(--border)', minWidth: 130 }}>Reja</th>
                 {subperiods.map(sp => (
-                  <th key={sp.index} style={{ padding: '11px 14px', textAlign: 'center', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid var(--border)', minWidth: 110 }}>{sp.label}</th>
+                  <th key={sp.index} style={{ padding: '11px 14px', textAlign: 'center', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid var(--border)', minWidth: 110 }}>{sp.label}
+                    <div style={{ marginTop: 2, fontSize: 10, fontWeight: 500, textTransform: 'none', letterSpacing: 0 }}>{shortDate(sp.start)} – {shortDate(sp.end)}</div>
+                  </th>
                 ))}
                 <th style={{ padding: '11px 14px', textAlign: 'right', fontSize: 11, fontWeight: 700, color: '#16a34a', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid var(--border)', minWidth: 130 }}>Bajarildi</th>
                 <th style={{ padding: '11px 14px', textAlign: 'center', fontSize: 11, fontWeight: 700, color: 'var(--text3)', textTransform: 'uppercase', letterSpacing: '0.05em', borderBottom: '1px solid var(--border)', minWidth: 70 }}>%</th>
@@ -636,8 +704,15 @@ function ProgressView({ planId }: { planId: number }) {
                     </div>
                   </td>
 
-                  {/* Sub-period columns */}
-                  {emp.subperiods.map(sp => {
+                  {/* Sub-period columns — nobody with a $0 plan has a weekly plan, so those cells stay empty */}
+                  {emp.target <= 0 ? emp.subperiods.map(sp => (
+                    <td key={sp.index} style={{
+                      borderBottom: '1px solid var(--border)',
+                      borderLeft: sp.isCurrent ? '2px solid rgba(37,99,235,0.35)' : '1px solid var(--border)',
+                      borderRight: sp.isCurrent ? '2px solid rgba(37,99,235,0.35)' : 'none',
+                      background: sp.isCurrent ? 'rgba(37,99,235,0.04)' : 'transparent',
+                    }} />
+                  )) : emp.subperiods.map(sp => {
                     const met      = sp.actual >= sp.target * 0.9;
                     const exceeded = sp.actual > sp.target;
                     const barColor = sp.isPast
