@@ -759,6 +759,18 @@ function ProgressView({ planId }: { planId: number }) {
 
       <div style={{ fontSize: 11.5, color: 'var(--text3)', lineHeight: 1.6 }}>
         * Har bir tugallangan davr uchun asl natija hisobga olinadi. Qolgan davrlar uchun maqsad = (jami reja − o'tgan davrlar summasi) / qolgan davrlar soni.
+        {data.plan.period_type === 'monthly' && (() => {
+          // days of the plan period that fall outside the four 7-day weeks
+          const planStart = data.plan.period_start.slice(0, 10);
+          const planEnd   = data.plan.period_end.slice(0, 10);
+          const first = subperiods[0].start, last = subperiods[subperiods.length - 1].end;
+          const gaps: string[] = [];
+          if (first > planStart) gaps.push(`${shortDate(planStart)} – ${shortDate(addDaysISO(first, -1))}`);
+          if (last < planEnd) gaps.push(`${shortDate(addDaysISO(last, 1))} – ${shortDate(planEnd)}`);
+          return gaps.length
+            ? <><br />* Haftalar 7 kunlik. Haftalardan tashqaridagi kunlar ({gaps.join(', ')}) haftalik ustunlarda ko'rinmaydi, lekin sotuvlari "Bajarildi" ga qo'shiladi.</>
+            : null;
+        })()}
       </div>
 
       {/* ── Summary row: Donut · Top-5 · Dynamics chart ─────────── */}

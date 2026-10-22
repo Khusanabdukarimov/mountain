@@ -113,10 +113,8 @@ function addDays(iso, n) {
   return `${t.getUTCFullYear()}-${pad(t.getUTCMonth() + 1)}-${pad(t.getUTCDate())}`;
 }
 
-// The date a monthly plan's weeks are counted from: plan.week_start when it leaves every week
-// non-empty, else the plan's own start. Weeks are 7 days from it; 1-hafta also takes the days of the
-// period before it and 4-hafta runs to the period end, so the four weeks always cover the whole
-// period and the totals never change with the chosen date.
+// The date a monthly plan's weeks are counted from: plan.week_start when every week can
+// keep some days inside the period, else the plan's own start.
 function weekAnchor(plan) {
   const startStr = plan.period_start.slice(0, 10);
   const endStr   = plan.period_end.slice(0, 10);
@@ -130,13 +128,18 @@ function getSubperiods(plan) {
   const endStr   = plan.period_end.slice(0, 10);
 
   if (plan.period_type === 'monthly') {
+    // Four 7-day weeks counted from the week start, cut off at the period edges (a week is
+    // never longer than 7 days). Days of the period outside the four weeks are in no weekly
+    // column; the progress endpoint still adds their sales to the employee's total.
     const ws = weekAnchor(plan);
     const result = [];
     for (let i = 0; i < 4; i++) {
+      const rawStart = addDays(ws, 7 * i);
+      const rawEnd   = addDays(ws, 7 * i + 6);
       result.push({
         index: i + 1,
-        start: i === 0 ? startStr : addDays(ws, 7 * i),
-        end:   i === 3 ? endStr   : addDays(ws, 7 * i + 6),
+        start: rawStart < startStr ? startStr : rawStart,
+        end:   rawEnd   > endStr   ? endStr   : rawEnd,
         label: `${i + 1}-hafta`,
       });
     }
@@ -572,15 +575,16 @@ router.get('/plans/:id/progress', async (req, res) => {
     // Also build flat CRM total (not filtered by subperiod) to match distribution endpoint
     const actualsByResp = {};
     const crmTotalByResp = {};
+    const outsideByResp = {}; // sales on days that fall in none of the sub-periods (e.g. after the 4th 7-day week)
     for (const row of actualsRes.rows) {
       if (!actualsByResp[row.responsible_id]) actualsByResp[row.responsible_id] = {};
       crmTotalByResp[row.responsible_id] = (crmTotalByResp[row.responsible_id] || 0) + parseFloat(row.amount);
-      for (const sp of subperiods) {
-        if (row.close_date >= sp.start && row.close_date <= sp.end) {
-          actualsByResp[row.responsible_id][sp.index] =
-            (actualsByResp[row.responsible_id][sp.index] || 0) + parseFloat(row.amount);
-          break;
-        }
+      const sp = subperiods.find(w => row.close_date >= w.start && row.close_date <= w.end);
+      if (sp) {
+        actualsByResp[row.responsible_id][sp.index] =
+          (actualsByResp[row.responsible_id][sp.index] || 0) + parseFloat(row.amount);
+      } else {
+        outsideByResp[row.responsible_id] = (outsideByResp[row.responsible_id] || 0) + parseFloat(row.amount);
       }
     }
 
@@ -605,7 +609,7 @@ router.get('/plans/:id/progress', async (req, res) => {
         const s = stored[sp.index];
         mergedActuals[sp.index] = s !== undefined ? s : (crmActuals[sp.index] || 0);
       }
-      const totalActual    = Object.values(mergedActuals).reduce((s, v) => s + v, 0);
+      const totalActual    = Object.values(mergedActuals).reduce((s, v) => s + v, 0) + (outsideByResp[emp.responsible_id] || 0);
       const crmTotalActual = crmTotalByResp[emp.responsible_id] || 0;
       const target         = parseFloat(emp.target);
       return {
