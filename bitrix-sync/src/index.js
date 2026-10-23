@@ -120,31 +120,6 @@ Promise.all([
       assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
   `).catch(err => console.error('[startup] taqsimot membership migration failed:', err.message)),
-  // Distribution streams keyed by FORM NAME (matched against the lead title with ILIKE, see
-  // services/taqsimotForms.js) — they replace the per-campaign streams above, whose tables
-  // are no longer read. Seeded once, on a fresh table: "DU - Proten" (both DU - Proten
-  // forms) goes to Davlatyor (16) in full — what the two campaign streams amounted to
-  // (~95% of their leads were DU - Proten forms), now also for leads that arrive without UTM.
-  pool.query(`
-    CREATE TABLE IF NOT EXISTS taqsimot_form_settings (
-      form_pattern TEXT PRIMARY KEY,
-      active BOOLEAN NOT NULL DEFAULT FALSE
-    );
-    CREATE TABLE IF NOT EXISTS taqsimot_form_members (
-      form_pattern TEXT NOT NULL REFERENCES taqsimot_form_settings(form_pattern) ON DELETE CASCADE,
-      responsible_id BIGINT NOT NULL,
-      pct NUMERIC(5,2) NOT NULL DEFAULT 0,
-      PRIMARY KEY (form_pattern, responsible_id)
-    );
-    INSERT INTO taqsimot_form_settings (form_pattern, active)
-      SELECT 'DU - Proten', TRUE WHERE NOT EXISTS (SELECT 1 FROM taqsimot_form_settings)
-      ON CONFLICT DO NOTHING;
-    INSERT INTO taqsimot_form_members (form_pattern, responsible_id, pct)
-      SELECT 'DU - Proten', 16, 100 WHERE EXISTS (SELECT 1 FROM responsibles WHERE id = 16)
-        AND EXISTS (SELECT 1 FROM taqsimot_form_settings WHERE form_pattern = 'DU - Proten')
-        AND NOT EXISTS (SELECT 1 FROM taqsimot_form_members)
-      ON CONFLICT DO NOTHING;
-  `).catch(err => console.error('[startup] taqsimot form streams migration failed:', err.message)),
   pool.query(`
     ALTER TABLE leads ADD COLUMN IF NOT EXISTS uf_amo_date TIMESTAMPTZ;
     CREATE INDEX IF NOT EXISTS leads_uf_amo_date_idx ON leads(uf_amo_date);

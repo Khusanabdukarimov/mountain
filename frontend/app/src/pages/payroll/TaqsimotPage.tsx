@@ -28,11 +28,6 @@ type StatRow = {
   deficit_pct: number | null;
 };
 
-type FormResponsible = { id: number; full_name: string; work_position: string | null; pct: number; attached: boolean };
-type FormSetting = { form_name: string; active: boolean; matches_30d: number; responsibles: FormResponsible[] };
-type FormSummary = { form_name: string; active: boolean };
-type FormMembership = { responsible_id: number; form_name: string; pct: number };
-
 // ── API helpers ───────────────────────────────────────────────────────────────
 
 function fetchTaqsimot() {
@@ -41,24 +36,6 @@ function fetchTaqsimot() {
 
 function fetchStats() {
   return apiGet<{ stats: StatRow[]; date: string }>("/api/dashboard/taqsimot-stats", {}, API_URL_CRM);
-}
-
-function fetchFormSetting(name: string) {
-  return apiGet<FormSetting>(`/api/dashboard/taqsimot-form?form_name=${encodeURIComponent(name)}`, {}, API_URL_CRM);
-}
-
-function fetchFormStats(name: string) {
-  return apiGet<{ stats: StatRow[]; date: string }>(`/api/dashboard/taqsimot-form-stats?form_name=${encodeURIComponent(name)}`, {}, API_URL_CRM);
-}
-
-async function saveRequest(path: string, body: object, method = "PUT") {
-  const res = await authedFetch(path, {
-    method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
-  }, API_URL_CRM);
-  if (!res.ok) {
-    const payload = await res.json().catch(() => ({}));
-    throw new Error(payload.error || `${res.status} ${res.statusText}`);
-  }
 }
 
 async function saveTaqsimot(id: number, pct: number) {
@@ -84,14 +61,10 @@ async function addTaqsimotResponsible(id: number, pct: number) {
 
 // ── Page ─────────────────────────────────────────────────────────────────────
 
-const GENERAL = ""; // the stream key of the general pool
-
 export default function TaqsimotPage() {
   const qc    = useQueryClient();
   const toast = useToast();
-  const [view, setView] = useState<"general" | "forms">("general");
-  const [selectedForm, setSelectedForm] = useState("");
-  const [addOpen, setAddOpen] = useState(false);
+  const [addResponsibleOpen, setAddResponsibleOpen] = useState(false);
 
   const { data, isLoading, refetch } = useQuery({
     queryKey: ["taqsimot"],
@@ -103,89 +76,36 @@ export default function TaqsimotPage() {
     queryFn: fetchStats,
     refetchInterval: 60_000,
   });
-  const formListQ = useQuery({
-    queryKey: ["taqsimot-forms"],
-    queryFn: () => apiGet<{ forms: FormSummary[] }>("/api/dashboard/taqsimot-forms", {}, API_URL_CRM),
-  });
-  const forms = formListQ.data?.forms ?? [];
-  const formName = view === "general" ? "" : selectedForm || forms[0]?.form_name || "";
-  const membershipsQ = useQuery({
-    queryKey: ["taqsimot-form-memberships"],
-    queryFn: () => apiGet<{ memberships: FormMembership[] }>("/api/dashboard/taqsimot-form-memberships", {}, API_URL_CRM),
-  });
-  const formOptionsQ = useQuery({
-    queryKey: ["taqsimot-form-options"],
-    queryFn: () => apiGet<{ forms: string[] }>("/api/dashboard/taqsimot-form-options", {}, API_URL_CRM),
-    enabled: addOpen,
-  });
-  const formQ = useQuery({ queryKey: ["taqsimot-form", formName], queryFn: () => fetchFormSetting(formName), enabled: !!formName });
-  const formStatsQ = useQuery({
-    queryKey: ["taqsimot-form-stats", formName], queryFn: () => fetchFormStats(formName),
-    enabled: !!formName, refetchInterval: 60_000,
+  const candidatesQ = useQuery({
+    queryKey: ["taqsimot-candidates"],
+    queryFn: () => apiGet<{ responsibles: Responsible[] }>("/api/dashboard/taqsimot-candidates", {}, API_URL_CRM),
+    enabled: addResponsibleOpen,
   });
 
   const rows = data?.responsibles ?? [];
   const total = rows.reduce((s, r) => s + parseFloat(String(r.taqsimot_pct ?? 0)), 0);
   const totalRounded = Math.round(total * 10) / 10;
-  const formTotal = Math.round((formQ.data?.responsibles ?? []).reduce((sum, r) => sum + r.pct, 0) * 10) / 10;
 
-  /** What is left of 100% in a stream (GENERAL = the general pool). */
-  function remainingFor(stream: string) {
-    if (stream === GENERAL) return Math.max(0, 100 - totalRounded);
-    const used = (membershipsQ.data?.memberships ?? []).filter(m => m.form_name === stream).reduce((sum, m) => sum + m.pct, 0);
-    return Math.max(0, Math.round((100 - used) * 10) / 10);
-  }
-
-  async function refreshDistribution() {
-    await Promise.all([
-      qc.invalidateQueries({ queryKey: ["taqsimot"] }),
-      qc.invalidateQueries({ queryKey: ["taqsimot-forms"] }),
-      qc.invalidateQueries({ queryKey: ["taqsimot-form-memberships"] }),
-      qc.invalidateQueries({ queryKey: ["taqsimot-form-options"] }),
-      qc.invalidateQueries({ queryKey: ["taqsimot-form"] }),
-      qc.invalidateQueries({ queryKey: ["taqsimot-form-stats"] }),
-      qc.invalidateQueries({ queryKey: ["taqsimot-stats"] }),
-      qc.invalidateQueries({ queryKey: ["taqsimot-candidates"] }),
-    ]);
-  }
-
-  async function saveFormPct(id: number, pct: number) {
+  async function addResponsible(id: number, pct: number) {
     try {
-      await saveRequest(`/api/dashboard/taqsimot-form/${id}`, { form_name: formName, pct });
-      await refreshDistribution();
-    } catch (e) { toast.error("Saqlashda xato", (e as Error).message); }
-  }
-
-  async function setFormActive(active: boolean) {
-    try {
-      await saveRequest("/api/dashboard/taqsimot-form", { form_name: formName, active });
-      await refreshDistribution();
-      toast.success("Saqlandi", active ? "Forma oqimi yoqildi" : "Forma oqimi o'chirildi");
-    } catch (e) { toast.error("Saqlashda xato", (e as Error).message); }
-  }
-
-  /** One entry point for both kinds of stream: the general pool or a form (existing or new). */
-  async function addToStream(stream: string, id: number, pct: number) {
-    try {
-      if (stream === GENERAL) {
-        await addTaqsimotResponsible(id, pct);
-      } else {
-        if (!forms.some(f => f.form_name === stream)) {
-          await saveRequest("/api/dashboard/taqsimot-forms", { form_name: stream }, "POST");
-        }
-        await saveRequest("/api/dashboard/taqsimot-form-members", { form_name: stream, responsible_id: id, pct }, "POST");
-      }
-      await refreshDistribution();
-      if (stream === GENERAL) setView("general"); else { setView("forms"); setSelectedForm(stream); }
-      setAddOpen(false);
-      toast.success("Qo‘shildi", stream === GENERAL ? "Mas’ul umumiy oqimga qo‘shildi" : `Mas’ul “${stream}” formasiga qo‘shildi`);
+      await addTaqsimotResponsible(id, pct);
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["taqsimot"] }),
+        qc.invalidateQueries({ queryKey: ["taqsimot-candidates"] }),
+        qc.invalidateQueries({ queryKey: ["taqsimot-stats"] }),
+      ]);
+      setAddResponsibleOpen(false);
+      toast.success("Qo‘shildi", "Mas’ul taqsimotga qo‘shildi");
     } catch (e) { toast.error("Qo‘shishda xato", (e as Error).message); }
   }
 
   async function handleSave(id: number, pct: number) {
     try {
       const result = await saveTaqsimot(id, pct);
-      await refreshDistribution();
+      await Promise.all([
+        qc.invalidateQueries({ queryKey: ["taqsimot"] }),
+        qc.invalidateQueries({ queryKey: ["taqsimot-stats"] }),
+      ]);
       if (result.warning) {
         toast.error("Diqqat", result.warning);
       }
@@ -201,106 +121,25 @@ export default function TaqsimotPage() {
         sub="Xodimlar bo'yicha lid taqsimoti"
         actions={
           <>
-            <Button variant="primary" onClick={() => setAddOpen(true)}>
-              <Plus className="w-3.5 h-3.5" /> Qo'shish
+            <Button variant="primary" onClick={() => setAddResponsibleOpen(true)}>
+              <Plus className="w-3.5 h-3.5" /> Mas'ul qo'shish
             </Button>
-            <Button onClick={() => { refetch(); statsQ.refetch(); formQ.refetch(); formStatsQ.refetch(); }}>
+            <Button onClick={() => { refetch(); statsQ.refetch(); }}>
               <RefreshCw className="w-3.5 h-3.5" /> Yangilash
             </Button>
           </>
         }
       />
 
-      {addOpen && <AddDialog
-        initialStream={view === "general" ? GENERAL : formName}
-        forms={forms.map(f => f.form_name)}
-        formOptions={formOptionsQ.data?.forms ?? []}
-        remainingFor={remainingFor}
-        onClose={() => setAddOpen(false)}
-        onSave={addToStream}
+      {addResponsibleOpen && <AddResponsibleDialog
+        responsibles={candidatesQ.data?.responsibles ?? []}
+        loading={candidatesQ.isLoading}
+        remaining={Math.max(0, 100 - totalRounded)}
+        onClose={() => setAddResponsibleOpen(false)}
+        onSave={addResponsible}
       />}
 
       <div className="flex-1 overflow-y-auto px-3 sm:px-[22px] py-3 sm:py-[18px] bg-bg space-y-5">
-
-        <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={() => setView("general")}
-            className={`px-3 py-2 rounded-lg border text-[12px] ${view === "general" ? "bg-blue-600 text-white border-blue-600" : "bg-bg2 text-text2 border-border hover:text-text"}`}>
-            Umumiy lead
-          </button>
-          <button type="button" onClick={() => setView("forms")}
-            className={`px-3 py-2 rounded-lg border text-[12px] ${view === "forms" ? "bg-blue-600 text-white border-blue-600" : "bg-bg2 text-text2 border-border hover:text-text"}`}>
-            Formalar
-          </button>
-        </div>
-
-        {view === "forms" &&
-        <div className="bg-bg2 border border-border rounded-xl shadow overflow-hidden">
-          <div className="px-4 py-3 border-b border-border flex items-center justify-between gap-4">
-            <div>
-              <div className="text-[12px] font-semibold text-text">Forma nomi bo'yicha alohida taqsimot</div>
-              {forms.length > 0 && <select aria-label="Forma tanlash" value={formName} onChange={(e) => setSelectedForm(e.target.value)}
-                className="mt-1 max-w-full rounded border border-border bg-bg px-2 py-1 text-[11px] text-text">
-                {forms.map(f => <option key={f.form_name} value={f.form_name}>{f.form_name}</option>)}
-              </select>}
-            </div>
-            <label className="flex items-center gap-2 text-[12px] text-text shrink-0">
-              <input type="checkbox" checked={formQ.data?.active ?? false}
-                disabled={!formQ.data || (!formQ.data.active && formTotal !== 100)}
-                onChange={(e) => setFormActive(e.target.checked)} />
-              Faol
-            </label>
-          </div>
-          <div className="px-4 py-2.5 text-[11px] text-text3 space-y-1">
-            <div>
-              Forma nomi lead sarlavhasidan qidiriladi (SQL LIKE, katta-kichik harf farqsiz): “DU - Proten” sarlavhasida shu matn bor
-              barcha leadlarni oladi. Ichida <strong>%</strong> yozsangiz u ixtiyoriy matn o‘rnini bosadi: “Xa Mountain%QL”.
-              Bir nechta forma mos kelsa, uzunrog‘i (aniqrog‘i) tanlanadi.
-            </div>
-            <div>
-              Har bir formaning foizi alohida 100% bo'ladi; umumiy lead foiziga ta'sir qilmaydi.
-            </div>
-            {formQ.data && <div className={formQ.data.matches_30d === 0 ? "text-red-400" : "text-green-500"}>
-              Oxirgi 30 kunda shu nomga {formQ.data.matches_30d} ta lead mos kelgan.
-            </div>}
-          </div>
-          {forms.length === 0 ? <div className="px-4 py-6 text-center text-[12px] text-text3 border-t border-border">
-            Hali forma qo'shilmagan. Yuqoridagi “Qo'shish” tugmasi orqali forma va mas'ulni qo'shing.
-          </div> :
-          <table className="w-full text-[12.5px]">
-            <thead><tr className="border-b border-border bg-bg3">
-              <th className="text-left px-4 py-2.5 text-text3">Xodim</th>
-              <th className="text-left px-4 py-2.5 text-text3 w-[40%]">Formalar</th>
-              <th className="text-left px-4 py-2.5 text-text3 w-36">Taqsimot %</th>
-            </tr></thead>
-            <tbody>
-              {(formQ.data?.responsibles ?? []).map((r) => (
-                <FormPctRow key={r.id} row={r} onSave={saveFormPct}
-                  memberships={(membershipsQ.data?.memberships ?? []).filter(m => Number(m.responsible_id) === r.id)} />
-              ))}
-              {formQ.data?.responsibles.length === 0 && <tr><td colSpan={3} className="px-4 py-5 text-center text-[12px] text-text3">
-                Hali mas'ul qo'shilmagan. Yuqoridagi “Qo'shish” tugmasini bosing.
-              </td></tr>}
-            </tbody>
-            <tfoot><tr className="border-t-2 border-border bg-bg3">
-              <td colSpan={2} className="px-4 py-2.5 font-semibold text-text">Jami</td>
-              <td className={`px-4 py-2.5 font-semibold ${formTotal === 100 ? "text-green-500" : "text-red-400"}`}>
-                {formTotal}% {formTotal === 100 ? "✓" : "(100% bo'lishi kerak)"}
-              </td>
-            </tr></tfoot>
-          </table>}
-          {formQ.data?.active && (
-            <div className="border-t border-border px-4 py-3">
-              <div className="text-[12px] font-semibold text-text mb-2">Bugungi forma leadlari</div>
-              <div className="flex flex-wrap gap-4 text-[11px] text-text2">
-                {(formStatsQ.data?.stats ?? []).map((s) => (
-                  <span key={s.id}>{s.full_name}: <strong className="text-text">{s.today_count}</strong> / {s.target_pct}%</span>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>}
-
-        {view === "general" && <>
         {/* ── Settings table ─────────────────────────────────────────── */}
         <div className="bg-bg2 border border-border rounded-xl shadow overflow-hidden">
           <div className="px-4 py-3 border-b border-border">
@@ -455,97 +294,55 @@ export default function TaqsimotPage() {
             </tbody>
           </table>
         </div>
-        </>}
       </div>
     </>
   );
 }
 
-// ── Editable % cell ───────────────────────────────────────────────────────────
+// ── Add responsible ───────────────────────────────────────────────────────────
 
-const NEW_FORM = "__new_form__";
-
-/** One window for both kinds of stream: pick the general pool, a form, or type a new form. */
-function AddDialog({ initialStream, forms, formOptions, remainingFor, onClose, onSave }: {
-  initialStream: string;
-  forms: string[];
-  formOptions: string[];
-  remainingFor: (stream: string) => number;
+function AddResponsibleDialog({ responsibles, loading, remaining, onClose, onSave }: {
+  responsibles: Responsible[];
+  loading: boolean;
+  remaining: number;
   onClose: () => void;
-  onSave: (stream: string, id: number, pct: number) => Promise<void>;
+  onSave: (id: number, pct: number) => Promise<void>;
 }) {
-  const [choice, setChoice] = useState(initialStream);   // GENERAL, a form name, or NEW_FORM
-  const [newName, setNewName] = useState("");
   const [responsibleId, setResponsibleId] = useState(0);
   const [pct, setPct] = useState("0");
   const [saving, setSaving] = useState(false);
-
-  const isNew = choice === NEW_FORM;
-  const stream = isNew ? newName.trim() : choice;
-  const candidatesQ = useQuery({
-    queryKey: ["taqsimot-candidates", isNew ? NEW_FORM : stream],
-    // a form typed here has no members yet, so every active responsible is a candidate
-    queryFn: () => apiGet<{ responsibles: Responsible[] }>(
-      `/api/dashboard/taqsimot-candidates${isNew ? `?form_name=${NEW_FORM}` : stream ? `?form_name=${encodeURIComponent(stream)}` : ""}`,
-      {}, API_URL_CRM),
-  });
-  const responsibles = candidatesQ.data?.responsibles ?? [];
-  const remaining = isNew ? 100 : remainingFor(choice);
   const value = Number(pct);
   const selectedId = responsibles.some(r => r.id === responsibleId) ? responsibleId : responsibles[0]?.id || 0;
-  const nameOk = !isNew || (newName.trim().length > 0 && newName.trim().length <= 200);
-  const valid = nameOk && selectedId > 0 && pct !== "" && Number.isFinite(value) && value >= 0 && value <= remaining;
-  const suggestions = formOptions.filter(f => !forms.includes(f));
+  const valid = selectedId > 0 && pct !== "" && Number.isFinite(value) && value >= 0 && value <= remaining;
 
   async function submit() {
     if (!valid || saving) return;
     setSaving(true);
-    try { await onSave(stream, selectedId, value); } finally { setSaving(false); }
+    try { await onSave(selectedId, value); } finally { setSaving(false); }
   }
 
   return <Dialog.Root open onOpenChange={(open) => { if (!open && !saving) onClose(); }}>
     <Dialog.Portal>
       <Dialog.Overlay className="fixed inset-0 bg-black/50 backdrop-blur-[2px] z-[300]" />
       <Dialog.Content className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 z-[301] bg-bg2 border border-border rounded-xl shadow-xl w-[calc(100%-24px)] max-w-lg max-h-[88vh] overflow-y-auto p-5">
-        <Dialog.Title className="text-[15px] font-semibold text-text">Taqsimotga qo'shish</Dialog.Title>
+        <Dialog.Title className="text-[15px] font-semibold text-text">Mas'ul qo'shish</Dialog.Title>
         <Dialog.Description className="text-[12px] text-text3 mt-1 mb-4">
-          Umumiy lead oqimiga yoki forma oqimiga mas'ul qo'shing. Qolgan ulush: {remaining}%.
+          Umumiy lead oqimiga mas'ul qo'shing. Qolgan ulush: {remaining}%.
         </Dialog.Description>
-        <div className="space-y-3">
-          <label className="block text-[11px] text-text3">Taqsimot turi
-            <select value={choice} onChange={(e) => { setChoice(e.target.value); setResponsibleId(0); }}
-              className="mt-1 w-full rounded border border-border bg-bg px-3 py-2 text-[12px] text-text">
-              <option value={GENERAL}>Umumiy lead</option>
-              {forms.map(f => <option key={f} value={f}>Forma: {f}</option>)}
-              <option value={NEW_FORM}>＋ Yangi forma…</option>
-            </select>
-          </label>
-          {isNew && <label className="block text-[11px] text-text3">Forma nomi (LIKE)
-            <input list="taqsimot-form-options" value={newName} onChange={(e) => setNewName(e.target.value)} maxLength={200}
-              placeholder="Masalan: DU - Proten yoki Xa Mountain%QL"
-              className="mt-1 w-full rounded border border-border bg-bg px-3 py-2 text-[12px] text-text" />
-            <datalist id="taqsimot-form-options">
-              {suggestions.map(f => <option key={f} value={f} />)}
-            </datalist>
-            <span className="block mt-1 text-[10.5px] text-text3">
-              Lead sarlavhasida shu matn bo'lsa, lead shu formaga tushadi (katta-kichik harf farqsiz). % — ixtiyoriy matn.
-            </span>
-          </label>}
-          {candidatesQ.isLoading ? <div className="py-4 text-[12px] text-text3">Yuklanmoqda...</div> : responsibles.length ?
-            <>
-              <label className="block text-[11px] text-text3">Mas'ul xodim
-                <select value={selectedId} onChange={(e) => setResponsibleId(Number(e.target.value))}
-                  className="mt-1 w-full rounded border border-border bg-bg px-3 py-2 text-[12px] text-text">
-                  {responsibles.map((r) => <option key={r.id} value={r.id}>{r.full_name} — {r.work_position || "Lavozim ko'rsatilmagan"}</option>)}
-                </select>
-              </label>
-              <label className="block text-[11px] text-text3">Taqsimot ulushi (%)
-                <input type="number" min={0} max={remaining} step={0.1} value={pct} onChange={(e) => setPct(e.target.value)}
-                  className="mt-1 w-full rounded border border-border bg-bg px-3 py-2 text-[12px] text-text" />
-              </label>
-              {pct !== "" && value > remaining && <div className="text-[11px] text-red-400">Foiz qolgan ulushdan oshmasligi kerak.</div>}
-            </> : <div className="py-4 text-center text-[12px] text-text3">Qo'shish uchun faol mas'ul qolmagan.</div>}
-        </div>
+        {loading ? <div className="py-6 text-[12px] text-text3">Yuklanmoqda...</div> : responsibles.length ?
+          <div className="space-y-3">
+            <label className="block text-[11px] text-text3">Mas'ul xodim
+              <select value={selectedId} onChange={(e) => setResponsibleId(Number(e.target.value))}
+                className="mt-1 w-full rounded border border-border bg-bg px-3 py-2 text-[12px] text-text">
+                {responsibles.map((r) => <option key={r.id} value={r.id}>{r.full_name} — {r.work_position || "Lavozim ko'rsatilmagan"}</option>)}
+              </select>
+            </label>
+            <label className="block text-[11px] text-text3">Taqsimot ulushi (%)
+              <input type="number" min={0} max={remaining} step={0.1} value={pct} onChange={(e) => setPct(e.target.value)}
+                className="mt-1 w-full rounded border border-border bg-bg px-3 py-2 text-[12px] text-text" />
+            </label>
+            {!valid && <div className="text-[11px] text-red-400">Foiz qolgan ulushdan oshmasligi kerak.</div>}
+          </div> : <div className="py-6 text-center text-[12px] text-text3">Qo'shish uchun faol mas'ul qolmagan.</div>}
         <div className="flex justify-end gap-2 mt-4">
           <Button onClick={onClose} disabled={saving}>Bekor qilish</Button>
           <Button variant="primary" onClick={submit} disabled={!valid || saving}>{saving ? "Saqlanmoqda..." : "Saqlash"}</Button>
@@ -554,6 +351,8 @@ function AddDialog({ initialStream, forms, formOptions, remainingFor, onClose, o
     </Dialog.Portal>
   </Dialog.Root>;
 }
+
+// ── Editable % cell ───────────────────────────────────────────────────────────
 
 function TaqsimotRow({
   row,
@@ -644,46 +443,6 @@ function TaqsimotRow({
             {hasVal ? `${pct}%` : "—"}
           </button>
         )}
-      </td>
-    </tr>
-  );
-}
-
-function FormPctRow({ row, onSave, memberships }: {
-  row: FormResponsible;
-  onSave: (id: number, pct: number) => Promise<void>;
-  memberships: FormMembership[];
-}) {
-  const [draft, setDraft] = useState(String(row.pct));
-  useEffect(() => setDraft(String(row.pct)), [row.pct]);
-
-  function commit() {
-    const pct = Number(draft);
-    if (!Number.isFinite(pct) || pct < 0 || pct > 100) {
-      setDraft(String(row.pct));
-      return;
-    }
-    if (row.attached && pct !== row.pct) onSave(row.id, pct);
-  }
-
-  return (
-    <tr className="border-b border-border">
-      <td className="px-4 py-2.5 text-text">{row.full_name}</td>
-      <td className="px-4 py-2.5">
-        <div className="flex flex-wrap items-center gap-1.5">
-          {memberships.map(m => <span key={m.form_name} title={`${m.form_name} — ${m.pct}%`}
-            className="inline-block max-w-[220px] truncate rounded bg-blue/10 px-2 py-1 text-[11px] text-blue">
-            {m.form_name} · {m.pct}%
-          </span>)}
-          {memberships.length === 0 && <span className="text-[11px] text-text3">—</span>}
-        </div>
-      </td>
-      <td className="px-4 py-2.5">
-        <input type="number" min={0} max={100} step={0.5} value={draft} disabled={!row.attached}
-          onChange={(e) => setDraft(e.target.value)} onBlur={commit}
-          onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
-          title={row.attached ? "Ushbu forma uchun foiz" : "Avval xodimni formaga qo‘shing"}
-          className="w-20 px-2 py-1 rounded border border-border bg-bg text-text text-[12px] mono disabled:opacity-40" /> %
       </td>
     </tr>
   );
