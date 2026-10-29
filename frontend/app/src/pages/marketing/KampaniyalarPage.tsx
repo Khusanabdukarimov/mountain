@@ -11,7 +11,7 @@ import {
   getPageForms, getKunlikHisobot, getCampaignCreatives, getCreativeLeads, getCreativeDeals,
   getActiveCampaignNames, getCampaignFormStats, getCampaignAssignments, getSifatliTotal, MONTH_KEYS,
 } from "@/lib/api/meta";
-import type { MonthKey, PageForm } from "@/lib/api/meta";
+import type { CampaignFormStat, MonthKey, PageForm } from "@/lib/api/meta";
 import { fmtNum } from "@/lib/utils";
 
 
@@ -1106,7 +1106,18 @@ export default function KampaniyalarPage() {
                   cur.leads  += r.leads;
                   spendMap.set(r.campaign_name, cur);
                 }
-                const fsRows = (formStatsQ.data?.rows ?? [])
+                // form-stats only knows campaigns that already have a form lead, so a new campaign that
+                // has spent money but got no lead yet would be missing: it is listed here with zeros.
+                // (Not while a Forma filter is on — then only that form's leads are meant.)
+                const withStats = new Set((formStatsQ.data?.rows ?? []).map(r => r.campaign_name));
+                const noLeadRows: CampaignFormStat[] = filterFormIds.length ? [] : [...spendMap.entries()]
+                  .filter(([name, m]) => m.spend > 0 && !withStats.has(name))
+                  .sort((a, b) => b[1].spend - a[1].spend)
+                  .map(([campaign_name]) => ({
+                    campaign_name, jami_lid: 0, tasdiqlangan: 0, bitrixda_bor: 0, bitrixda_yoq: 0,
+                    sifatli: 0, sifatsiz: 0, bekor_boldi: 0, sotuv_boldi: 0,
+                  }));
+                const fsRows = [...(formStatsQ.data?.rows ?? []), ...noLeadRows]
                   .filter(r => activeCampNames.size === 0 || activeCampNames.has(r.campaign_name))
                   .filter(r => !targetologCampSet || targetologCampSet.has(r.campaign_name))
                   .filter(r => filterCampaigns.length === 0 || filterCampaigns.includes(r.campaign_name))

@@ -10,7 +10,9 @@
 // phone is looked up among live Bitrix leads, and a lead of the same form made at /
 // after the submission means the connector (or someone) already did it — that lead
 // is linked and nothing is created. That is what makes the creator safe to leave
-// running while the connector works, and a safety net while it does not.
+// running while the connector works, and a safety net while it does not. "Of the same
+// form" is decided by name and, because the connector's own form name often differs
+// from Meta's, also by timing (see isFormLead).
 
 const pool = require('../db/pool');
 const { bitrixPost, fetchOne } = require('./bitrix');
@@ -20,6 +22,14 @@ const MAIN_RESPONSIBLE_ID = parseInt(process.env.MAIN_RESPONSIBLE_ID || '1', 10)
 const SOURCE_TARGET = 'UC_89FPH6';
 const STATUS_NEW_LEAD = 'IN_PROCESS'; // "Yangi lid" (NEW is "Qo'ng'iroqlar")
 const DUP_SLACK_MS = 10 * 60 * 1000;  // a lead made this long before the submission is not its lead
+
+// The connector titles its leads `Заполнение CRM-формы "<CRM form name>"`, and that name lives in Bitrix,
+// so it often differs from the Meta form's ("XA Mountain 07.10" vs "XA - Mountain 07.10"; "Xa Mountain 14.10"
+// for the 14.10 HL form). It makes its lead within seconds of the submission, so a connector lead on the
+// same phone created in this window belongs to the submission whatever its form is called.
+const CONNECTOR_TITLE = /^\s*Заполнение CRM-формы(?:\s|$)/i; // (\b does not work after a Cyrillic letter)
+const CONNECTOR_BEFORE_MS = 60 * 1000;
+const CONNECTOR_AFTER_MS = 5 * 60 * 1000;
 const SRC = 'facebook-lead-creator';
 
 // Where the connector puts each answer of the "Xa Mountain / AE Logic" forms
@@ -137,6 +147,18 @@ async function leadsWithPhone(phone) {
   return (list && list.result) || [];
 }
 
+// "xa - mountain 07.10" and "XA Mountain 07.10" are the same name: compare letters and digits only
+const normName = v => String(v || '').toLowerCase().replace(/[^\p{L}\p{N}]+/gu, '');
+
+/** Is this Bitrix lead the lead of the submission's form? By name, or made by the connector right after it. */
+function isFormLead(lead, title, submittedAt) {
+  const wanted = normName(title);
+  if (wanted && normName(lead.TITLE).includes(wanted)) return true;
+  const created = new Date(lead.DATE_CREATE).getTime();
+  return CONNECTOR_TITLE.test(String(lead.TITLE || ''))
+    && created >= submittedAt - CONNECTOR_BEFORE_MS && created <= submittedAt + CONNECTOR_AFTER_MS;
+}
+
 /**
  * Leads on this phone created at/after the submission, split into the form's own lead
  * (`existing` — the connector got there first, however late) and anything else (`other`
@@ -155,8 +177,8 @@ async function findLeadsForSubmission(fl, title) {
     [recent.map(l => parseInt(l.ID, 10)), fl.id]);
   const claimed = new Set(rows.map(r => String(r.bitrix_lead_id)));
   const free = recent.filter(l => !claimed.has(String(l.ID)));
-  const needle = title.toLowerCase();
-  const existing = free.filter(l => String(l.TITLE || '').toLowerCase().includes(needle));
+  const submittedAt = new Date(fl.created_time).getTime();
+  const existing = free.filter(l => isFormLead(l, title, submittedAt));
   return { existing, other: free.filter(l => !existing.includes(l)) };
 }
 
@@ -201,4 +223,4 @@ async function ensureLeadForSubmission(fl, { dry = false } = {}) {
   return { status: 'created', leadId, fields, unmapped, reason: note };
 }
 
-module.exports = { FORMS, buildFields, titleFor, ensureLeadForSubmission, tash, sleep, clean, digits };
+module.exports = { FORMS, buildFields, titleFor, ensureLeadForSubmission, isFormLead, tash, sleep, clean, digits };

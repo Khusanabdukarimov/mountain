@@ -27,7 +27,7 @@ mock('../src/services/bitrix', {
 });
 mock('../src/services/upsertLead', { upsertLead: async () => {} });
 
-const { buildFields, ensureLeadForSubmission } = require('../src/services/facebookLeadCreator');
+const { buildFields, ensureLeadForSubmission, isFormLead } = require('../src/services/facebookLeadCreator');
 
 const base = {
   id: '111', phone: '+998901112233', full_name: 'Ali', platform: 'ig', is_organic: false,
@@ -160,4 +160,40 @@ test('a lead already linked to another submission of the same person is not reus
   const r2 = await ensureLeadForSubmission({ ...base, form_id: '1601875095315664', field_data: {} });
   assert.equal(r2.status, 'linked');
   assert.equal(r2.leadId, '44560');
+});
+
+const at = (ms) => new Date(base.created_time.getTime() + ms).toISOString();
+
+test('the connector\'s lead is recognised whatever its CRM form is called (made seconds after the submission)', async () => {
+  reset();
+  // Meta form "Xa Mountain 14.10 HL", Bitrix CRM form "Xa Mountain 14.10"
+  state.phoneLeads = [{ ID: '45274', TITLE: 'Заполнение CRM-формы "Xa Mountain 14.10"', DATE_CREATE: at(6_000) }];
+  const r = await ensureLeadForSubmission({ ...base, form_id: '2542155936289286', field_data: {} });
+  assert.equal(r.status, 'linked');
+  assert.equal(r.leadId, '45274');
+  assert.ok(!state.calls.some(c => c.method === 'crm.lead.add'));
+});
+
+test('a name that differs only in punctuation and case is the same form, even long after the submission', () => {
+  const submitted = base.created_time.getTime();
+  const lead = { TITLE: 'Заполнение CRM-формы "XA Mountain 07.10"', DATE_CREATE: at(3 * 3600_000) };
+  assert.equal(isFormLead(lead, 'XA - Mountain 07.10', submitted), true);
+});
+
+test('a connector lead of another name outside the few minutes after the submission is not its lead', async () => {
+  const submitted = base.created_time.getTime();
+  const other = t => ({ TITLE: 'Заполнение CRM-формы "Forma 2"', DATE_CREATE: at(t) });
+  assert.equal(isFormLead(other(30_000), 'Xa Mountain 14.10 QL', submitted), true);        // right after: the connector's
+  assert.equal(isFormLead(other(-30_000), 'Xa Mountain 14.10 QL', submitted), true);       // clocks may differ a little
+  assert.equal(isFormLead(other(-4 * 60_000), 'Xa Mountain 14.10 QL', submitted), false);  // an earlier submission's lead
+  assert.equal(isFormLead(other(10 * 60_000), 'Xa Mountain 14.10 QL', submitted), false);  // too late to be this one
+  // and a lead that is not the connector's (a call, a manual lead) is never taken for it
+  assert.equal(isFormLead({ TITLE: '+998 50 876 30 00 - Исходящий звонок', DATE_CREATE: at(30_000) }, 'Xa Mountain 14.10 QL', submitted), false);
+});
+
+test('a lead of another name outside the window does not stop the form lead from being created', async () => {
+  reset();
+  state.phoneLeads = [{ ID: '45302', TITLE: 'Заполнение CRM-формы "Forma 2"', DATE_CREATE: at(-4 * 60_000) }];
+  const r = await ensureLeadForSubmission({ ...base, form_id: '1757388405517976', field_data: {} });
+  assert.equal(r.status, 'created');
 });
