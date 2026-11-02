@@ -75,6 +75,8 @@ async function ensureSchema() {
     )
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS reja_week_actuals_idx ON reja_week_actuals(plan_id, responsible_id)`);
+  // Date the weekly columns are counted from (NULL = the plan's own start date), see getSubperiods.
+  await pool.query(`ALTER TABLE reja_plans ADD COLUMN IF NOT EXISTS week_start DATE`);
 }
 
 // ── Helper: fetch a plan enriched with aggregate columns ──────────
@@ -105,23 +107,41 @@ function localISO(d) {
   return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
 }
 
+function addDays(iso, n) {
+  const [y, m, d] = iso.split('-').map(Number);
+  const t = new Date(Date.UTC(y, m - 1, d + n));
+  return `${t.getUTCFullYear()}-${pad(t.getUTCMonth() + 1)}-${pad(t.getUTCDate())}`;
+}
+
+// The date a monthly plan's weeks are counted from: plan.week_start when every week can
+// keep some days inside the period, else the plan's own start.
+function weekAnchor(plan) {
+  const startStr = plan.period_start.slice(0, 10);
+  const endStr   = plan.period_end.slice(0, 10);
+  const ws = plan.week_start ? String(plan.week_start).slice(0, 10) : startStr;
+  return addDays(ws, 6) >= startStr && addDays(ws, 21) <= endStr ? ws : startStr;
+}
+
 function getSubperiods(plan) {
   // Use period_start as string directly to avoid timezone shifts
   const startStr = plan.period_start.slice(0, 10); // "YYYY-MM-DD"
   const endStr   = plan.period_end.slice(0, 10);
 
   if (plan.period_type === 'monthly') {
-    // Build 4 weekly chunks of 7 days each, anchored to period_start
-    const [sy, sm, sd] = startStr.split('-').map(Number);
+    // Four 7-day weeks counted from the week start, cut off at the period edges (a week is
+    // never longer than 7 days). Days of the period outside the four weeks are in no weekly
+    // column; the progress endpoint still adds their sales to the employee's total.
+    const ws = weekAnchor(plan);
     const result = [];
-    let cursor = new Date(sy, sm - 1, sd);
     for (let i = 0; i < 4; i++) {
-      const wStart = localISO(cursor);
-      // Each week = 7 days; last week ends exactly on period_end
-      const wEndRaw = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 6);
-      const wEnd = i === 3 ? endStr : localISO(wEndRaw);
-      result.push({ index: i + 1, start: wStart, end: wEnd, label: `${i + 1}-hafta` });
-      cursor = new Date(wEndRaw.getFullYear(), wEndRaw.getMonth(), wEndRaw.getDate() + 1);
+      const rawStart = addDays(ws, 7 * i);
+      const rawEnd   = addDays(ws, 7 * i + 6);
+      result.push({
+        index: i + 1,
+        start: rawStart < startStr ? startStr : rawStart,
+        end:   rawEnd   > endStr   ? endStr   : rawEnd,
+        label: `${i + 1}-hafta`,
+      });
     }
     return result;
   }
@@ -274,7 +294,7 @@ router.post('/plans', async (req, res) => {
 });
 
 // PUT /api/reja/plans/:id
-// Body: { name?, total_target?, period_start?, period_end? }
+// Body: { name?, total_target?, period_start?, period_end?, week_start? (null = plan start) }
 // Returns the enriched plan.
 router.put('/plans/:id', async (req, res) => {
   const id   = parseInt(req.params.id);
@@ -287,6 +307,32 @@ router.put('/plans/:id', async (req, res) => {
   if (body.total_target !== undefined) { sets.push(`total_target = $${i++}`); vals.push(body.total_target); }
   if (body.period_start !== undefined) { sets.push(`period_start = $${i++}`); vals.push(body.period_start); }
   if (body.period_end   !== undefined) { sets.push(`period_end = $${i++}`);   vals.push(body.period_end); }
+
+  if (body.week_start !== undefined) {
+    // null / '' = back to the plan's own start date
+    const ws = body.week_start ? String(body.week_start).slice(0, 10) : null;
+    if (ws !== null) {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(ws) || isNaN(new Date(`${ws}T00:00:00Z`).getTime())) {
+        return res.status(400).json({ error: 'week_start must be a date (YYYY-MM-DD)' });
+      }
+      try {
+        const cur = await pool.query('SELECT period_type, period_start, period_end FROM reja_plans WHERE id = $1', [id]);
+        if (!cur.rows.length) return res.status(404).json({ error: 'Plan not found' });
+        const start = String(body.period_start ?? cur.rows[0].period_start).slice(0, 10);
+        const end   = String(body.period_end   ?? cur.rows[0].period_end).slice(0, 10);
+        if (cur.rows[0].period_type !== 'monthly') {
+          return res.status(400).json({ error: 'Hafta boshlanishi faqat oylik reja uchun' });
+        }
+        if (addDays(ws, 6) < start || addDays(ws, 21) > end) {
+          return res.status(400).json({ error: `Hafta boshlanishi ${addDays(start, -6)} va ${addDays(end, -21)} oralig'ida bo'lishi kerak` });
+        }
+      } catch (err) {
+        return res.status(500).json({ error: err.message });
+      }
+    }
+    sets.push(`week_start = $${i++}`);
+    vals.push(ws);
+  }
 
   if (!sets.length) return res.status(400).json({ error: 'Nothing to update' });
 
@@ -529,15 +575,16 @@ router.get('/plans/:id/progress', async (req, res) => {
     // Also build flat CRM total (not filtered by subperiod) to match distribution endpoint
     const actualsByResp = {};
     const crmTotalByResp = {};
+    const outsideByResp = {}; // sales on days that fall in none of the sub-periods (e.g. after the 4th 7-day week)
     for (const row of actualsRes.rows) {
       if (!actualsByResp[row.responsible_id]) actualsByResp[row.responsible_id] = {};
       crmTotalByResp[row.responsible_id] = (crmTotalByResp[row.responsible_id] || 0) + parseFloat(row.amount);
-      for (const sp of subperiods) {
-        if (row.close_date >= sp.start && row.close_date <= sp.end) {
-          actualsByResp[row.responsible_id][sp.index] =
-            (actualsByResp[row.responsible_id][sp.index] || 0) + parseFloat(row.amount);
-          break;
-        }
+      const sp = subperiods.find(w => row.close_date >= w.start && row.close_date <= w.end);
+      if (sp) {
+        actualsByResp[row.responsible_id][sp.index] =
+          (actualsByResp[row.responsible_id][sp.index] || 0) + parseFloat(row.amount);
+      } else {
+        outsideByResp[row.responsible_id] = (outsideByResp[row.responsible_id] || 0) + parseFloat(row.amount);
       }
     }
 
@@ -562,7 +609,7 @@ router.get('/plans/:id/progress', async (req, res) => {
         const s = stored[sp.index];
         mergedActuals[sp.index] = s !== undefined ? s : (crmActuals[sp.index] || 0);
       }
-      const totalActual    = Object.values(mergedActuals).reduce((s, v) => s + v, 0);
+      const totalActual    = Object.values(mergedActuals).reduce((s, v) => s + v, 0) + (outsideByResp[emp.responsible_id] || 0);
       const crmTotalActual = crmTotalByResp[emp.responsible_id] || 0;
       const target         = parseFloat(emp.target);
       return {
@@ -773,4 +820,4 @@ router.get('/plans/:planId/responsibles/:responsibleId/weeks', async (req, res) 
   }
 });
 
-module.exports = { router, ensureSchema };
+module.exports = { router, ensureSchema, getSubperiods };

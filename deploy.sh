@@ -191,12 +191,14 @@ else
     ALL_OK=false
 fi
 
-API_RESP=$(curl -sfk --max-time 8 "https://${PUBLIC_IP}/api/auth/status" 2>/dev/null || echo "")
+# /api/subscription is the one /api route that stays open when the subscription
+# has expired (every other /api route answers 402), so it is the reliable probe.
+API_RESP=$(curl -sfk --max-time 8 "https://${PUBLIC_IP}/api/subscription" 2>/dev/null || echo "")
 if [[ -n "$API_RESP" ]]; then
-    AUTH_ENABLED=$(echo "$API_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print('enabled' if d.get('enabled') else 'disabled')" 2>/dev/null || echo "?")
-    ok "  /api/auth/status: ${DIM}auth $AUTH_ENABLED${RESET}"
+    SUB_STATE=$(echo "$API_RESP" | python3 -c "import sys,json; d=json.load(sys.stdin); print('EXPIRED (dashboard locked)' if d.get('expired') else ('active' if d.get('enabled') else 'no limit'))" 2>/dev/null || echo "?")
+    ok "  /api/subscription: ${DIM}$SUB_STATE${RESET}"
 else
-    warn "  /api/auth/status failed"
+    warn "  /api/subscription failed"
     ALL_OK=false
 fi
 

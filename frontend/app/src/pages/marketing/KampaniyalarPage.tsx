@@ -9,9 +9,9 @@ import { Skeleton } from "@/components/Skeleton";
 import {
   getMetaInsights, getMetaCampaigns, getCampaignForms, getFormLeads,
   getPageForms, getKunlikHisobot, getCampaignCreatives, getCreativeLeads, getCreativeDeals,
-  getActiveCampaignNames, getCampaignFormStats, getCampaignAssignments, MONTH_KEYS,
+  getActiveCampaignNames, getCampaignFormStats, getCampaignAssignments, getSifatliTotal, MONTH_KEYS,
 } from "@/lib/api/meta";
-import type { MonthKey, PageForm } from "@/lib/api/meta";
+import type { CampaignFormStat, MonthKey, PageForm } from "@/lib/api/meta";
 import { fmtNum } from "@/lib/utils";
 
 
@@ -89,10 +89,30 @@ function notInBitrixReason(phone: string, isDuplicate: boolean): string {
   return 'Bitrix24 da yo\'q';
 }
 
-function CreativeLeadsPanel({ adsetName, month, year, from, to }: { adsetName: string; month: MonthKey; year: number; from: string; to: string }) {
+// "Sifatli" total over exactly the slice on screen, computed like Kunlik hisobot's
+// "Maqsadli lidlar soni": distinct (day, person), so the headline matches that page.
+// A sum of table rows is higher whenever one person applied to two ads on the same
+// day (they are in both rows), so totals ask the server; the row sum is only shown
+// while that request is loading or if it fails.
+function useSifatliTotal(from: string, to: string, scope: { campaigns?: string[]; adIds?: string[]; formIds?: string[] }, fallback: number) {
   const q = useQuery({
-    queryKey: ["creative-leads", adsetName, month, year, from, to],
-    queryFn: () => getCreativeLeads(adsetName, month, year, from, to),
+    queryKey: ["sifatli-total", from, to, JSON.stringify(scope)],
+    queryFn: () => getSifatliTotal(from, to, scope),
+    staleTime: 30_000,
+    refetchInterval: 60_000,
+  });
+  return q.data?.total ?? fallback;
+}
+
+function SifatliTotalCell({ from, to, scope, fallback, className }: { from: string; to: string; scope: { campaigns?: string[]; adIds?: string[]; formIds?: string[] }; fallback: number; className: string }) {
+  const total = useSifatliTotal(from, to, scope, fallback);
+  return <td className={className}>{total}</td>;
+}
+
+function CreativeLeadsPanel({ adsetName, adId, campaignName, month, year, from, to }: { adsetName: string; adId?: string | null; campaignName?: string; month: MonthKey; year: number; from: string; to: string }) {
+  const q = useQuery({
+    queryKey: ["creative-leads", adsetName, adId, campaignName, month, year, from, to],
+    queryFn: () => getCreativeLeads(adsetName, month, year, from, to, adId, campaignName),
     staleTime: 2 * 60_000,
   });
   if (q.isLoading) return <tr><td colSpan={10} className="px-6 py-4"><div className="space-y-2">{Array.from({ length: 3 }).map((_, i) => <Skeleton key={i} className="h-3 w-full" />)}</div></td></tr>;
@@ -143,14 +163,14 @@ function CreativeLeadsPanel({ adsetName, month, year, from, to }: { adsetName: s
   );
 }
 
-function SotuvDealsPanel({ adsetName, month, year, from, to, sotuvFrom, sotuvTo }: { adsetName: string; month: MonthKey; year: number; from: string; to: string; sotuvFrom?: string; sotuvTo?: string }) {
+function SotuvDealsPanel({ adsetName, adId, campaignName, month, year, from, to, sotuvFrom, sotuvTo }: { adsetName: string; adId?: string | null; campaignName?: string; month: MonthKey; year: number; from: string; to: string; sotuvFrom?: string; sotuvTo?: string }) {
   const q = useQuery({
-    queryKey: ["creative-deals", adsetName, month, year, from, to, sotuvFrom, sotuvTo],
-    queryFn: () => getCreativeDeals(adsetName, month, year, from, to, sotuvFrom, sotuvTo),
+    queryKey: ["creative-deals", adsetName, adId, campaignName, month, year, from, to, sotuvFrom, sotuvTo],
+    queryFn: () => getCreativeDeals(adsetName, month, year, from, to, sotuvFrom, sotuvTo, { adId, campaignName }),
     staleTime: 2 * 60_000,
   });
   if (q.isLoading) return <tr><td colSpan={10} className="px-6 py-4"><div className="space-y-2">{Array.from({ length: 2 }).map((_, i) => <Skeleton key={i} className="h-3 w-full" />)}</div></td></tr>;
-  if (!q.data?.deals?.length) return <tr><td colSpan={10} className="px-6 py-4 text-[12px] text-text3 italic">Bu adset uchun sotuv sdelkalari topilmadi</td></tr>;
+  if (!q.data?.deals?.length) return <tr><td colSpan={10} className="px-6 py-4 text-[12px] text-text3 italic">Bu creative uchun sotuv sdelkalari topilmadi</td></tr>;
   return (
     <tr><td colSpan={10} className="p-0">
       <div className="border-t border-border/40 bg-[#22c55e]/5">
@@ -645,8 +665,7 @@ export default function KampaniyalarPage() {
     return m;
   }, [formsQ.data]);
 
-const formDbStatsMap = useMemo(() => {
-    const creatives = creativesQ.data?.creatives ?? [];
+  const formDbStatsMap = useMemo(() => {
     // spend/clicks come from `allRows` (Meta Insights, real adset-level data) —
     // NOT split evenly across a campaign's "active form count" (the old method
     // dumped a campaign's entire spend onto whichever form happened to be the
@@ -654,12 +673,13 @@ const formDbStatsMap = useMemo(() => {
     // fraction of that campaign's adsets).
     const m = new Map<string, { leads: number; sifatli: number; spend: number; clicks: number }>();
     for (const [formId, adsetNames] of formAdsetsMap) {
-      let leads = 0, sifatli = 0, spend = 0, clicks = 0;
-      for (const c of creatives) {
-        if (!adsetNames.has(c.adset_name)) continue;
-        leads   += c.meta_leads ?? 0;
-        sifatli += c.sifatli ?? 0;
-      }
+      // A single adset can feed multiple forms. Do not assign the whole
+      // adset's creative total to every form (15 + 15 = 30); form lead counts
+      // must stay keyed by form_id from /campaigns/forms.
+      const formStats = formLeadsMap.get(formId) ?? { leads: 0, sifatli: 0 };
+      const leads = formStats.leads;
+      const sifatli = formStats.sifatli;
+      let spend = 0, clicks = 0;
       for (const r of allRows) {
         if (!adsetNames.has(r.adset_name)) continue;
         spend  += r.spend;
@@ -668,7 +688,7 @@ const formDbStatsMap = useMemo(() => {
       m.set(formId, { leads, sifatli, spend, clicks });
     }
     return m;
-  }, [formAdsetsMap, creativesQ.data, allRows]);
+  }, [formAdsetsMap, formLeadsMap, allRows]);
 
   // Hide forms with no activity in the selected period (0 leads AND $0 spend AND
   // 0 clicks) — a date filter should only surface forms that actually ran/produced
@@ -719,10 +739,21 @@ const formDbStatsMap = useMemo(() => {
     [visibleForms, formDbStatsMap, formLeadsMap],
   );
 
-  const totalSifatliFromForms = useMemo(
+  const totalSifatliRowSum = useMemo(
     () => filteredCreativesForKpi.reduce((a, r) => a + (r.sifatli ?? 0), 0),
     [filteredCreativesForKpi],
   );
+  // What the card counts: campaigns (targetolog / Kampaniya filters) when only
+  // those are set, otherwise exactly the ads left after the Adset / Creative /
+  // Forma filters. No filter = everything, i.e. Kunlik's own total.
+  const narrowedByAd = filterAdsets.length > 0 || filterCreatives.length > 0 || !!formAdsetNames;
+  const sifatliScope = useMemo(() => {
+    if (narrowedByAd) return { adIds: filteredCreativesForKpi.map(r => r.ad_id).filter((x): x is string => !!x) };
+    if (!targetologCampSet && filterCampaigns.length === 0) return {};
+    const base = targetologCampSet ? [...targetologCampSet] : filterCampaigns;
+    return { campaigns: base.filter(c => (!targetologCampSet || targetologCampSet.has(c)) && (filterCampaigns.length === 0 || filterCampaigns.includes(c))) };
+  }, [narrowedByAd, filteredCreativesForKpi, targetologCampSet, filterCampaigns]);
+  const totalSifatliFromForms = useSifatliTotal(fromDate, toDate, sifatliScope, totalSifatliRowSum);
 
   const totalSotuvFromCreatives = useMemo(
     () => (formStatsQ.data?.rows ?? [])
@@ -1075,7 +1106,18 @@ const formDbStatsMap = useMemo(() => {
                   cur.leads  += r.leads;
                   spendMap.set(r.campaign_name, cur);
                 }
-                const fsRows = (formStatsQ.data?.rows ?? [])
+                // form-stats only knows campaigns that already have a form lead, so a new campaign that
+                // has spent money but got no lead yet would be missing: it is listed here with zeros.
+                // (Not while a Forma filter is on — then only that form's leads are meant.)
+                const withStats = new Set((formStatsQ.data?.rows ?? []).map(r => r.campaign_name));
+                const noLeadRows: CampaignFormStat[] = filterFormIds.length ? [] : [...spendMap.entries()]
+                  .filter(([name, m]) => m.spend > 0 && !withStats.has(name))
+                  .sort((a, b) => b[1].spend - a[1].spend)
+                  .map(([campaign_name]) => ({
+                    campaign_name, jami_lid: 0, tasdiqlangan: 0, bitrixda_bor: 0, bitrixda_yoq: 0,
+                    sifatli: 0, sifatsiz: 0, bekor_boldi: 0, sotuv_boldi: 0,
+                  }));
+                const fsRows = [...(formStatsQ.data?.rows ?? []), ...noLeadRows]
                   .filter(r => activeCampNames.size === 0 || activeCampNames.has(r.campaign_name))
                   .filter(r => !targetologCampSet || targetologCampSet.has(r.campaign_name))
                   .filter(r => filterCampaigns.length === 0 || filterCampaigns.includes(r.campaign_name))
@@ -1152,7 +1194,8 @@ const formDbStatsMap = useMemo(() => {
                           <td className="px-4 py-2.5 text-[11px] font-bold text-text" colSpan={2}>JAMI</td>
                           <td className="px-4 py-2.5 font-bold text-text">${Math.round(totals.spend)}</td>
                           <td className="px-4 py-2.5 font-bold text-blue">{totals.jami}</td>
-                          <td className="px-4 py-2.5 font-bold text-green">{totals.sifatli}</td>
+                          <SifatliTotalCell from={fromDate} to={toDate} className="px-4 py-2.5 font-bold text-green" fallback={totals.sifatli}
+                            scope={{ campaigns: fsRows.map(r => r.campaign_name), ...(filterFormIds.length ? { formIds: filterFormIds } : {}) }} />
                           <td className="px-4 py-2.5 text-red/80">{totals.sifatsiz}</td>
                           <td className="px-4 py-2.5 text-amber">{totals.bekor}</td>
                           <td className="px-4 py-2.5 font-bold" style={{ color: "#22c55e" }}>{totals.sotuv}</td>
@@ -1393,8 +1436,8 @@ const formDbStatsMap = useMemo(() => {
                                 <td className={`${TD} text-right text-[11px]`}><span className={r.bekor_boldi > 0 ? "text-amber" : "text-text3"}>{r.bekor_boldi}</span></td>
                                 <td className={TD}><SifatBar rate={r.sifat_rate} /></td>
                               </tr>
-                              {isExpAd    && <CreativeLeadsPanel key={`panel-${adKey}`} adsetName={r.adset_name} month={month} year={year} from={fromDate} to={toDate} />}
-                              {isExpSotuv && <SotuvDealsPanel    key={`sotuv-${adKey}`} adsetName={r.adset_name} month={month} year={year} from={fromDate} to={toDate} />}
+                              {isExpAd    && <CreativeLeadsPanel key={`panel-${adKey}`} adsetName={r.adset_name} adId={r.ad_id} campaignName={r.campaign_name} month={month} year={year} from={fromDate} to={toDate} />}
+                              {isExpSotuv && <SotuvDealsPanel    key={`sotuv-${adKey}`} adsetName={r.adset_name} adId={r.ad_id} campaignName={r.campaign_name} month={month} year={year} from={fromDate} to={toDate} />}
                             </>
                           );
                         })}
@@ -1406,7 +1449,8 @@ const formDbStatsMap = useMemo(() => {
                             <td className={`${TD} text-right font-bold text-text`}>${Math.round(totals.spend)}</td>
                             <td className={`${TD} text-right font-bold text-text2`}>{totals.meta_leads}</td>
                             <td className={`${TD} text-right font-bold text-blue`}>{totals.in_bitrix}</td>
-                            <td className={`${TD} text-right font-bold text-green`}>{totals.sifatli}</td>
+                            <SifatliTotalCell from={fromDate} to={toDate} className={`${TD} text-right font-bold text-green`} fallback={totals.sifatli}
+                              scope={{ adIds: filtered.map(r => r.ad_id).filter((x): x is string => !!x) }} />
                             <td className={`${TD} text-right font-bold text-text2`}>{totals.hook_rate ? `${totals.hook_rate}%` : "—"}</td>
                             <td className={`${TD} text-right font-bold text-text2`}>{totals.hold_rate ? `${totals.hold_rate}%` : "—"}</td>
                             <td className={`${TD} text-right font-bold`} style={{ color: "#22c55e" }}>{totals.sotuv_boldi}</td>

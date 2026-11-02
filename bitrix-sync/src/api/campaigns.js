@@ -5,6 +5,8 @@ const axios = require('axios');
 const pool = require('../db/pool');
 const { extractFields } = require('../services/facebook');
 const { resolvePhone } = require('../services/resolvePhone');
+const { syncActiveCreatives } = require('../services/activeCreatives');
+const { attributedSales, rowKey } = require('../services/creativeSales');
 
 const router = Router();
 
@@ -23,7 +25,14 @@ function accountId() {
 
 // Returns all configured ad account IDs (primary + optional extras)
 function allAccountIds() {
-  const accounts = [accountId()];
+  const accounts = [];
+  const primaryIds = [
+    process.env.META_AD_ACCOUNT_ID || '',
+    process.env.FB_AD_ACCOUNT_ID || '',
+  ];
+  for (const id of primaryIds) {
+    if (id) accounts.push(id.startsWith('act_') ? id : `act_${id}`);
+  }
   const extras = [
     process.env.META_AD_ACCOUNT_ID_2 || '',
     process.env.META_AD_ACCOUNT_ID_3 || '',
@@ -31,7 +40,7 @@ function allAccountIds() {
   for (const id of extras) {
     if (id) accounts.push(id.startsWith('act_') ? id : `act_${id}`);
   }
-  return accounts;
+  return [...new Set(accounts)];
 }
 
 // Returns campaign ID whitelist for a given account (from META_AD_ACCOUNT_ID_2_CAMPAIGN_IDS etc.)
@@ -103,6 +112,24 @@ pool.query(`
 `).catch(err => console.error('[campaigns] meta_creative_cache migration:', err.message));
 
 pool.query(`
+  CREATE TABLE IF NOT EXISTS meta_active_creatives (
+    ad_id         TEXT PRIMARY KEY,
+    account_id    TEXT,
+    campaign_id   TEXT,
+    campaign_name TEXT NOT NULL,
+    adset_id      TEXT,
+    adset_name    TEXT,
+    ad_name       TEXT,
+    creative_id   TEXT,
+    creative_name TEXT,
+    status        TEXT NOT NULL DEFAULT 'ACTIVE',
+    synced_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  );
+  CREATE INDEX IF NOT EXISTS idx_meta_active_creatives_campaign
+    ON meta_active_creatives(campaign_name);
+`).catch(err => console.error('[campaigns] meta_active_creatives init:', err.message));
+
+pool.query(`
   CREATE TABLE IF NOT EXISTS meta_ad_daily (
     date          DATE        NOT NULL,
     adset_id      TEXT        NOT NULL,
@@ -167,6 +194,84 @@ async function paginate(url, params) {
     nextParams = null; // next URL already includes all params
   }
   return rows;
+}
+
+// The assignment screen must also show campaigns that are active in Meta but
+// have not produced an insight row yet (for example, a newly launched
+// campaign). Keep this short-lived so opening Settings does not hit Graph API
+// on every request.
+let activeCampaignsCache = { expiresAt: 0, rows: [] };
+const adInsightsCache = new Map();
+
+async function fetchActiveCampaigns() {
+  if (activeCampaignsCache.expiresAt > Date.now()) return activeCampaignsCache.rows;
+  if (!token()) throw new Error('META_ACCESS_TOKEN or FB_ACCESS_TOKEN is not set');
+
+  const rows = [];
+  for (const acct of allAccountIds()) {
+    try {
+      const campaigns = await paginate(`${BASE}/${acct}/campaigns`, {
+        access_token: token(),
+        fields: 'id,name,status,effective_status,objective',
+        effective_status: '["ACTIVE"]',
+        limit: 200,
+      });
+      const whitelist = campaignWhitelist(acct);
+      for (const campaign of campaigns) {
+        if (campaign.status !== 'ACTIVE') continue;
+        if (whitelist && !whitelist.includes(campaign.id)) continue;
+        rows.push({
+          campaign_id: campaign.id,
+          campaign_name: campaign.name,
+          status: campaign.status,
+          objective: campaign.objective || null,
+          account_id: acct,
+        });
+      }
+    } catch (err) {
+      // One inaccessible account must not hide campaigns from the other
+      // configured accounts or the locally cached assignment data.
+      console.warn(`[campaign-assignments] active campaigns acct=${acct} failed:`, err.message);
+    }
+  }
+
+  const unique = [...new Map(rows.map(row => [row.campaign_name, row])).values()];
+  activeCampaignsCache = { expiresAt: Date.now() + 5 * 60_000, rows: unique };
+  return unique;
+}
+
+async function fetchAdInsights(since, until, campaignIds) {
+  const ids = [...new Set(campaignIds.filter(Boolean))].sort();
+  if (!ids.length || !token()) return new Map();
+  const key = `${since}|${until}|${ids.join(',')}`;
+  const cached = adInsightsCache.get(key);
+  if (cached && cached.expiresAt > Date.now()) return cached.rows;
+
+  const result = new Map();
+  for (const acct of allAccountIds()) {
+    try {
+      const rows = await paginate(`${BASE}/${acct}/insights`, {
+        access_token: token(),
+        fields: 'ad_id,ad_name,spend,impressions,actions,video_thruplay_watched_actions',
+        level: 'ad',
+        time_range: JSON.stringify({ since, until }),
+        filtering: JSON.stringify([{ field: 'campaign.id', operator: 'IN', value: ids }]),
+        limit: 500,
+      });
+      for (const row of rows) {
+        const prev = result.get(row.ad_id) || { spend: 0, impressions: 0, hook_views: 0, thruplay_views: 0 };
+        prev.spend += parseFloat(row.spend || 0);
+        prev.impressions += parseInt(row.impressions || 0, 10);
+        prev.hook_views += actionVal(row.actions, VIDEO_VIEW_TYPES);
+        prev.thruplay_views += sumActionValues(row.video_thruplay_watched_actions);
+        result.set(row.ad_id, prev);
+      }
+    } catch (err) {
+      console.warn(`[campaigns/creatives] ad insights acct=${acct} failed:`, err.message);
+    }
+  }
+  adInsightsCache.set(key, { expiresAt: Date.now() + 60_000, rows: result });
+  return result;
 }
 
 // ── Row aggregation (mirrors Python ads_to_table) ──────────────
@@ -333,6 +438,63 @@ router.get('/active-names', async (req, res) => {
 // is also how Meta attributes it, so late-night leads no longer drift to the
 // next day. Must stay consistent with backend/app/main.py (kunlik/page-forms).
 
+// ── "Maqsadli / sifatli lid" — the Kunlik hisobot rule, in one place ──────────
+// backend/app/main.py (api_marketing_kunlik) counts a person once per day when the
+// phone of one of their Meta form submissions belongs to ANY Bitrix lead at a
+// qualified stage, or to a lead-less deal at one. It neither requires the card to
+// carry the submission's campaign nor looks only at the newest card. The Campaign,
+// Forma and Creative tables used a stricter variant (newest card, UTM must match,
+// one count per submission), so the same month showed different "sifatli" numbers
+// on the two pages. COUNT(DISTINCT <this>) yields Kunlik's number for any slice of
+// facebook_leads: a campaign, an ad, a form, or everything.
+const SIFATLI_STAGES = `'THINKING','UC_KXC3ZW','CONSULTATION','UC_L28G68','NOT_TRANSFERRED','UC_5G8244','CONVERTED_CONSULT','CONVERTED','UC_NAZK5J','RECYCLED'`;
+function sifatliPersonDay(fl = 'fl') {
+  return `CASE WHEN LENGTH(${fl}.phone_norm) >= 9 AND (
+      EXISTS (SELECT 1 FROM lead_phones sp_lp
+                JOIN leads sp_le ON sp_le.id = sp_lp.lead_id
+                JOIN stages sp_s ON sp_s.id = sp_le.stage_id AND sp_s.entity = 'lead'
+               WHERE sp_lp.phone_norm = ${fl}.phone_norm AND sp_s.bitrix_id IN (${SIFATLI_STAGES}))
+      OR EXISTS (SELECT 1 FROM deal_phones sp_dp
+                JOIN deals sp_d ON sp_d.id = sp_dp.deal_id AND sp_d.lead_id IS NULL
+                JOIN stages sp_ds ON sp_ds.id = sp_d.stage_id AND sp_ds.entity = 'deal'
+               WHERE sp_dp.phone_norm = ${fl}.phone_norm AND sp_ds.bitrix_id IN (${SIFATLI_STAGES}))
+    ) THEN (${fl}.created_time AT TIME ZONE 'Asia/Tashkent')::date::text || '|' || ${fl}.phone_norm END`;
+}
+
+// GET /api/campaigns/sifatli-total?from=2026-10-01&to=2026-10-31[&campaigns=<json array>][&ad_ids=<json array>][&form_ids=<json array>]
+// Distinct (day, person) over the chosen slice — the figure a sum of table rows
+// cannot give (a person who applied to two ads the same day is in both rows), and
+// the one Kunlik shows for the same campaigns.
+router.get('/sifatli-total', async (req, res) => {
+  const { from, to } = req.query;
+  const isDate = v => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
+  if (!isDate(from) || !isDate(to)) return res.status(400).json({ error: 'from and to (YYYY-MM-DD) required' });
+  const list = raw => {
+    if (raw == null || raw === '') return null;
+    const v = JSON.parse(raw);
+    if (!Array.isArray(v) || v.some(x => typeof x !== 'string')) throw new Error('array of strings expected');
+    return v;
+  };
+  let campaigns, adIds, formIds;
+  try { campaigns = list(req.query.campaigns); adIds = list(req.query.ad_ids); formIds = list(req.query.form_ids); }
+  catch (e) { return res.status(400).json({ error: `bad filter: ${e.message}` }); }
+  try {
+    const { rows } = await pool.query(`
+      SELECT COUNT(DISTINCT ${sifatliPersonDay()})::int AS total
+      FROM facebook_leads fl
+      WHERE (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date >= $1::date
+        AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date <= $2::date
+        AND ($3::text[] IS NULL OR fl.campaign_name = ANY($3::text[]))
+        AND ($4::text[] IS NULL OR fl.ad_id = ANY($4::text[]))
+        AND ($5::text[] IS NULL OR fl.form_id = ANY($5::text[]))
+    `, [from, to, campaigns, adIds, formIds]);
+    res.json({ total: rows[0].total });
+  } catch (err) {
+    console.error('[campaigns/sifatli-total]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/campaigns/form-stats?from=2026-06-01&to=2026-06-15&form_id=123,456
 router.get('/form-stats', async (req, res) => {
   const from = req.query.from || null;
@@ -369,6 +531,25 @@ router.get('/form-stats', async (req, res) => {
           ${from ? `AND COALESCE(d.uf_bp_sale_date, d.date_create) >= $1::date` : ''}
           ${to   ? `AND COALESCE(d.uf_bp_sale_date, d.date_create) <= ${ from ? '$2' : '$1' }::date` : ''}
         GROUP BY fl.campaign_name
+        UNION ALL
+        -- Path C: the deal card's own UTM_CAMPAIGN, for deals Paths A and B cannot
+        -- see — no lead (or a lead with no campaign) and no phone to match a Meta
+        -- form lead, e.g. a returning customer's new deal. NOT EXISTS mirrors
+        -- Path B so a deal is never counted twice.
+        SELECT d.utm_campaign AS campaign_name, COUNT(DISTINCT d.id) AS cnt
+        FROM deals d
+        LEFT JOIN leads le ON le.id = d.lead_id
+        JOIN stages ds ON ds.id = d.stage_id AND ds.is_won = true
+        WHERE NULLIF(d.utm_campaign, '') IS NOT NULL
+          AND (d.lead_id IS NULL OR COALESCE(le.utm_campaign, '') = '')
+          AND NOT EXISTS (
+            SELECT 1 FROM deal_phones dp
+            JOIN facebook_leads fl ON fl.phone_norm = dp.phone_norm
+            WHERE dp.deal_id = d.id AND d.lead_id IS NULL AND fl.campaign_name IS NOT NULL
+          )
+          ${from ? `AND COALESCE(d.uf_bp_sale_date, d.date_create) >= $1::date` : ''}
+          ${to   ? `AND COALESCE(d.uf_bp_sale_date, d.date_create) <= ${ from ? '$2' : '$1' }::date` : ''}
+        GROUP BY d.utm_campaign
       ),
       sotuv_by_campaign AS (
         SELECT campaign_name, SUM(cnt)::int AS sotuv_boldi
@@ -412,7 +593,7 @@ router.get('/form-stats', async (req, res) => {
       -- LATERAL per fb-lead, which seq-scans and exhausts the pool). A returning
       -- contact's phone can match several Bitrix cards; only the newest counts.
       lead_latest AS (
-        SELECT DISTINCT ON (last9) last9, l.id, l.stage_id FROM (
+        SELECT DISTINCT ON (last9) last9, l.id, l.stage_id, l.utm_campaign FROM (
           SELECT lp.phone_norm AS last9, lp.lead_id
           FROM lead_phones lp
           WHERE lp.phone_norm <> ''
@@ -438,13 +619,15 @@ router.get('/form-stats', async (req, res) => {
         COUNT(DISTINCT CASE WHEN LENGTH(fl.phone_norm) >= 9 THEN fl.id END)::int              AS tasdiqlangan,
         COUNT(DISTINCT CASE WHEN le.id IS NOT NULL OR dp.deal_id IS NOT NULL THEN fl.id END)::int                              AS bitrixda_bor,
         COUNT(DISTINCT CASE WHEN le.id IS NULL AND dp.deal_id IS NULL THEN fl.id END)::int                                     AS bitrixda_yoq,
-        COUNT(DISTINCT CASE WHEN (le.id IS NOT NULL AND s.bitrix_id IN ('THINKING','UC_KXC3ZW','CONSULTATION','UC_L28G68','NOT_TRANSFERRED','UC_5G8244','CONVERTED_CONSULT','CONVERTED','UC_NAZK5J','RECYCLED'))
-                                 OR (dp.deal_id IS NOT NULL AND ds.bitrix_id IN ('THINKING','UC_KXC3ZW','CONSULTATION','UC_L28G68','NOT_TRANSFERRED','UC_5G8244','CONVERTED_CONSULT','CONVERTED','UC_NAZK5J','RECYCLED')) THEN fl.id END)::int AS sifatli,
+        COUNT(DISTINCT ${sifatliPersonDay()})::int AS sifatli,
         COUNT(DISTINCT CASE WHEN s.bitrix_id = 'UC_F8K4GI' OR ds.bitrix_id = 'UC_F8K4GI' THEN fl.id END)::int                AS sifatsiz,
         COUNT(DISTINCT CASE WHEN s.bitrix_id = 'UC_NAZK5J' OR ds.bitrix_id = 'UC_NAZK5J' THEN fl.id END)::int                AS bekor_boldi,
         COALESCE(sc.sotuv_boldi, 0)::int                                                                                       AS sotuv_boldi
       FROM facebook_leads fl
-      LEFT JOIN lead_latest le ON le.last9 = fl.phone_norm AND fl.phone_norm <> ''
+      LEFT JOIN lead_latest le
+        ON le.last9 = fl.phone_norm
+       AND fl.phone_norm <> ''
+       AND le.utm_campaign = fl.campaign_name
       LEFT JOIN stages s  ON s.id  = le.stage_id
       LEFT JOIN deal_latest dp ON dp.last9 = fl.phone_norm AND fl.phone_norm <> ''
       LEFT JOIN stages ds ON ds.id = dp.stage_id
@@ -493,7 +676,7 @@ router.get('/rows', async (req, res) => {
           SUM(link_clicks)::int     AS link_clicks
         FROM meta_ad_daily
         WHERE date >= $1::date AND date <= $2::date
-          AND objective IN ('OUTCOME_LEADS','LEAD_GENERATION')
+          AND objective IN ('OUTCOME_LEADS','LEAD_GENERATION','OUTCOME_TRAFFIC')
         GROUP BY campaign_name, adset_name, platform, objective
         ORDER BY SUM(spend) DESC
       `, [fromDate, toDate]);
@@ -813,7 +996,7 @@ router.get('/forms', async (req, res) => {
     // Latest-card-wins: only the newest phone-matched card's stage counts (see /form-stats).
     const { rows: sifatliRows } = await pool.query(`
       WITH lead_latest AS (
-        SELECT DISTINCT ON (last9) last9, l.id, l.stage_id FROM (
+        SELECT DISTINCT ON (last9) last9, l.id, l.stage_id, l.utm_campaign FROM (
           SELECT lp.phone_norm AS last9, lp.lead_id
           FROM lead_phones lp WHERE lp.phone_norm <> ''
         ) p JOIN leads l ON l.id = p.lead_id
@@ -828,12 +1011,12 @@ router.get('/forms', async (req, res) => {
       )
       SELECT
         fl.form_id,
-        COUNT(DISTINCT CASE WHEN
-            (le.id IS NOT NULL AND s.bitrix_id IN ('THINKING','UC_KXC3ZW','CONSULTATION','UC_L28G68','NOT_TRANSFERRED','UC_5G8244','CONVERTED_CONSULT','CONVERTED','UC_NAZK5J','RECYCLED'))
-            OR (dp.deal_id IS NOT NULL AND ds.bitrix_id IN ('THINKING','UC_KXC3ZW','CONSULTATION','UC_L28G68','NOT_TRANSFERRED','UC_5G8244','CONVERTED_CONSULT','CONVERTED','UC_NAZK5J','RECYCLED'))
-          THEN fl.id END)::int AS sifatli_lid
+        COUNT(DISTINCT ${sifatliPersonDay()})::int AS sifatli_lid
       FROM facebook_leads fl
-      LEFT JOIN lead_latest le ON le.last9 = fl.phone_norm AND fl.phone_norm <> ''
+      LEFT JOIN lead_latest le
+        ON le.last9 = fl.phone_norm
+       AND fl.phone_norm <> ''
+       AND le.utm_campaign = fl.campaign_name
       LEFT JOIN stages s ON s.id = le.stage_id
       LEFT JOIN deal_latest dp ON dp.last9 = fl.phone_norm AND fl.phone_norm <> ''
       LEFT JOIN stages ds ON ds.id = dp.stage_id
@@ -1232,10 +1415,11 @@ router.get('/creatives', async (req, res) => {
   const sotuvTo   = req.query.sotuv_to   || until;
 
   try {
-    // 1. Lead quality stats — match facebook_leads → Bitrix24 leads by phone (last 9 digits)
+    // 1. Lead quality stats — match each form lead to the Bitrix campaign UTM
+    // and keep the creative/ad breakdown intact.
     const { rows: qualRows } = await pool.query(`
       WITH lead_latest AS (
-        SELECT DISTINCT ON (last9) last9, l.id, l.stage_id FROM (
+        SELECT DISTINCT ON (last9) last9, l.id, l.stage_id, l.utm_campaign FROM (
           SELECT lp.phone_norm AS last9, lp.lead_id
           FROM lead_phones lp WHERE lp.phone_norm <> ''
         ) p JOIN leads l ON l.id = p.lead_id
@@ -1251,13 +1435,13 @@ router.get('/creatives', async (req, res) => {
       SELECT
         COALESCE(fl.adset_name, 'N/A')    AS adset_name,
         COALESCE(fl.campaign_name, 'N/A') AS campaign_name,
-        MAX(fl.ad_id)                     AS ad_id,
-        MAX(fl.ad_name)                   AS ad_name,
+        fl.ad_id                          AS ad_id,
+        fl.ad_name                        AS ad_name,
+        MAX(fl.campaign_id)               AS campaign_id,
         COUNT(DISTINCT fl.id)::int        AS meta_leads,
         COUNT(DISTINCT CASE WHEN le.id IS NOT NULL                                            THEN fl.id END)::int AS in_bitrix,
         COUNT(DISTINCT CASE WHEN le.id IS NULL                                                THEN fl.id END)::int AS not_in_bitrix,
-        COUNT(DISTINCT CASE WHEN le.id IS NOT NULL AND s.bitrix_id IN ('THINKING','UC_KXC3ZW','CONSULTATION','UC_L28G68','NOT_TRANSFERRED','UC_5G8244','CONVERTED_CONSULT','CONVERTED','UC_NAZK5J','RECYCLED')
-                                                                                               THEN fl.id END)::int AS sifatli,
+        COUNT(DISTINCT ${sifatliPersonDay()})::int AS sifatli,
         COUNT(DISTINCT CASE WHEN s.bitrix_id = 'UC_F8K4GI'                                   THEN fl.id END)::int AS sifatsiz,
         COUNT(DISTINCT CASE WHEN s.bitrix_id = 'UC_NAZK5J'                                   THEN fl.id END)::int AS bekor_boldi,
         COUNT(DISTINCT CASE WHEN s.bitrix_id = 'CONVERTED'                                   THEN fl.id END)::int AS konsultatsiya_otdi,
@@ -1267,59 +1451,36 @@ router.get('/creatives', async (req, res) => {
       FROM facebook_leads fl
       -- Latest-card-wins (see /form-stats): only the newest phone-matched
       -- lead/deal determines the quality columns for a returning contact.
-      LEFT JOIN lead_latest le ON le.last9 = fl.phone_norm AND fl.phone_norm <> ''
+      LEFT JOIN lead_latest le
+        ON le.last9 = fl.phone_norm
+       AND fl.phone_norm <> ''
+       AND le.utm_campaign = fl.campaign_name
       LEFT JOIN stages s ON s.id = le.stage_id
       LEFT JOIN deal_latest dp ON dp.last9 = fl.phone_norm AND fl.phone_norm <> ''
       LEFT JOIN stages ds ON ds.id = dp.stage_id
       WHERE (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date >= $1::date
         AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date <= $2::date
-      GROUP BY fl.adset_name, fl.campaign_name
+      GROUP BY fl.adset_name, fl.campaign_name, fl.ad_id, fl.ad_name
       ORDER BY meta_leads DESC
     `, [since, until, sotuvFrom, sotuvTo]);
 
-    // 1b. Sotuv per adset via two paths (always run, not just for separate sotuv dates):
-    //   Path A: deals -> lead_id -> leads -> lead_phones -> facebook_leads (UTM match)
-    //   Path B: deals -> deal_phones -> facebook_leads (for deals without lead_id)
-    let sotuvByAdset = {};
-    {
-      const { rows: sotuvRows } = await pool.query(`
-        WITH deduped AS (
-          -- Path A: deduplicate deal per (adset, campaign) before summing
-          SELECT DISTINCT ON (d.id, fl.adset_name, fl.campaign_name)
-                 d.id, COALESCE(fl.adset_name, 'N/A') AS adset_name, COALESCE(fl.campaign_name, 'N/A') AS campaign_name,
-                 CASE WHEN d.currency_id = 'USD' THEN COALESCE(d.opportunity, 0) ELSE 0 END AS opp
-          FROM deals d
-          JOIN stages ds ON ds.id = d.stage_id AND ds.is_won = true
-          JOIN leads le ON le.id = d.lead_id
-          JOIN lead_phones lp ON lp.lead_id = le.id
-          JOIN facebook_leads fl
-            ON fl.phone_norm
-             = lp.phone_norm
-            AND fl.campaign_name = le.utm_campaign
-          WHERE d.uf_bp_sale_date >= $1::date AND d.uf_bp_sale_date <= $2::date
-          UNION
-          -- Path B: deduplicate deal per (adset, campaign) before summing
-          SELECT DISTINCT ON (d.id, fl.adset_name, fl.campaign_name)
-                 d.id, COALESCE(fl.adset_name, 'N/A') AS adset_name, COALESCE(fl.campaign_name, 'N/A') AS campaign_name,
-                 CASE WHEN d.currency_id = 'USD' THEN COALESCE(d.opportunity, 0) ELSE 0 END AS opp
-          FROM deals d
-          JOIN stages ds ON ds.id = d.stage_id AND ds.is_won = true
-          JOIN deal_phones dp ON dp.deal_id = d.id
-          JOIN facebook_leads fl
-            ON fl.phone_norm
-             = dp.phone_norm
-          WHERE d.lead_id IS NULL
-            AND d.uf_bp_sale_date >= $1::date AND d.uf_bp_sale_date <= $2::date
-        )
-        SELECT adset_name, campaign_name,
-               COUNT(DISTINCT id)::int AS sotuv_boldi,
-               SUM(opp)::numeric       AS sotuv_sum
-        FROM deduped GROUP BY adset_name, campaign_name
-      `, [sotuvFrom, sotuvTo]);
-      for (const row of sotuvRows) {
-        sotuvByAdset[`${row.adset_name ?? 'N/A'}|${row.campaign_name ?? 'N/A'}`] = { cnt: row.sotuv_boldi, sum: parseFloat(row.sotuv_sum) || 0 };
-      }
+    // 1b. Sales: each won deal is credited to ONE creative row (services/creativeSales.js), so the
+    // rows add up to the real number of sales instead of repeating an adset's sales on every ad.
+    const salesByRow = new Map();
+    for (const sale of await attributedSales(pool, { since, until, sotuvFrom, sotuvTo })) {
+      const k = rowKey(sale.adset_name, sale.campaign_name, sale.row_ad_id);
+      const cur = salesByRow.get(k) || { cnt: 0, sum: 0 };
+      cur.cnt++;
+      cur.sum += parseFloat(sale.opp_usd) || 0;
+      salesByRow.set(k, cur);
     }
+    // A key is handed out once: two rows of the same ad id (a renamed ad) must not both show the sale
+    const takeSales = (adsetName, campaignName, adId) => {
+      const k = rowKey(adsetName, campaignName, adId);
+      const v = salesByRow.get(k);
+      salesByRow.delete(k);
+      return v || { cnt: 0, sum: 0 };
+    };
 
     // 2. Spend + hook/hold rate per adset+campaign from meta_ad_daily (date
     // range aware, not restricted to campaigns created within the selected
@@ -1356,8 +1517,17 @@ router.get('/creatives', async (req, res) => {
       };
     }
 
+    // Include currently active Meta ads even when they have generated no lead
+    // yet. New campaigns commonly have active creatives before the first form
+    // submission, so facebook_leads alone is not a complete creative list.
+    const { rows: activeRows } = await pool.query(`
+      SELECT ad_id, campaign_id, campaign_name, adset_name, ad_name, creative_id, creative_name
+      FROM meta_active_creatives
+      WHERE status = 'ACTIVE'
+    `);
+
     // 3. Creative name cache
-    const adIds = qualRows.map(r => r.ad_id).filter(Boolean);
+    const adIds = [...qualRows.map(r => r.ad_id), ...activeRows.map(r => r.ad_id)].filter(Boolean);
     const creativeMap = {};
     if (adIds.length) {
       const { rows: crRows } = await pool.query(
@@ -1367,9 +1537,21 @@ router.get('/creatives', async (req, res) => {
       for (const cr of crRows) creativeMap[cr.ad_id] = cr;
     }
 
+    const adMetrics = await fetchAdInsights(
+      since,
+      until,
+      [...qualRows.map(r => r.campaign_id), ...activeRows.map(r => r.campaign_id)],
+    );
+
     const result = qualRows.map(r => {
+      const sales = takeSales(r.adset_name, r.campaign_name, r.ad_id);
       const cr = creativeMap[r.ad_id] || {};
       const displayName = cr.video_title || cr.creative_name || r.ad_name || null;
+      const adMetric = adMetrics.get(r.ad_id);
+      const fallbackRate = rateMap[`${r.adset_name}|${r.campaign_name}`] || {};
+      const impressions = adMetric?.impressions ?? fallbackRate.impressions ?? 0;
+      const hookViews = adMetric?.hook_views ?? fallbackRate.hook_views ?? 0;
+      const thruplayViews = adMetric?.thruplay_views ?? fallbackRate.thruplay_views ?? 0;
       return {
       adset_name:    r.adset_name,
       campaign_name: r.campaign_name,
@@ -1379,12 +1561,12 @@ router.get('/creatives', async (req, res) => {
       thumbnail_url:   cr.thumbnail_url || null,
       ads_manager_url: cr.ads_manager_url || null,
       creative_platform: cr.creative_platform || null,
-      spend:         spendMap[`${r.adset_name}|${r.campaign_name}`] ?? 0,
-      impressions:      rateMap[`${r.adset_name}|${r.campaign_name}`]?.impressions ?? 0,
-      hook_views:        rateMap[`${r.adset_name}|${r.campaign_name}`]?.hook_views ?? 0,
-      thruplay_views:    rateMap[`${r.adset_name}|${r.campaign_name}`]?.thruplay_views ?? 0,
-      hook_rate:     rateMap[`${r.adset_name}|${r.campaign_name}`]?.hook_rate ?? 0,
-      hold_rate:     rateMap[`${r.adset_name}|${r.campaign_name}`]?.hold_rate ?? 0,
+      spend:         adMetric?.spend ?? spendMap[`${r.adset_name}|${r.campaign_name}`] ?? 0,
+      impressions,
+      hook_views:        hookViews,
+      thruplay_views:    thruplayViews,
+      hook_rate:     impressions ? round2(hookViews / impressions * 100) : 0,
+      hold_rate:     hookViews ? round2(thruplayViews / hookViews * 100) : 0,
       meta_leads:    r.meta_leads,
       in_bitrix:     r.in_bitrix,
       not_in_bitrix: r.not_in_bitrix,
@@ -1392,13 +1574,40 @@ router.get('/creatives', async (req, res) => {
       sifatsiz:           r.sifatsiz,
       bekor_boldi:        r.bekor_boldi,
       konsultatsiya_otdi: r.konsultatsiya_otdi,
-      sotuv_boldi:        sotuvByAdset[`${r.adset_name}|${r.campaign_name}`]?.cnt ?? 0,
-      sotuv_sum:          sotuvByAdset[`${r.adset_name}|${r.campaign_name}`]?.sum ?? 0,
+      sotuv_boldi:        sales.cnt,
+      sotuv_sum:          sales.sum,
       sifat_rate:    r.in_bitrix > 0
         ? Math.round((r.sifatli / r.in_bitrix) * 100)
         : 0,
       };
     });
+
+    const seenAdIds = new Set(qualRows.map(r => r.ad_id).filter(Boolean));
+    for (const r of activeRows) {
+      if (seenAdIds.has(r.ad_id)) continue;
+      const cr = creativeMap[r.ad_id] || {};
+      const adMetric = adMetrics.get(r.ad_id);
+      const impressions = adMetric?.impressions ?? 0;
+      const hookViews = adMetric?.hook_views ?? 0;
+      const thruplayViews = adMetric?.thruplay_views ?? 0;
+      result.push({
+        adset_name: r.adset_name || 'N/A',
+        campaign_name: r.campaign_name,
+        ad_id: r.ad_id,
+        ad_name: cr.video_title || cr.creative_name || r.creative_name || r.ad_name || null,
+        post_url: cr.post_url || null,
+        thumbnail_url: cr.thumbnail_url || null,
+        ads_manager_url: cr.ads_manager_url || null,
+        creative_platform: cr.creative_platform || null,
+        spend: adMetric?.spend ?? 0, impressions, hook_views: hookViews, thruplay_views: thruplayViews,
+        hook_rate: impressions ? round2(hookViews / impressions * 100) : 0,
+        hold_rate: hookViews ? round2(thruplayViews / hookViews * 100) : 0,
+        meta_leads: 0, in_bitrix: 0, not_in_bitrix: 0,
+        sifatli: 0, sifatsiz: 0, bekor_boldi: 0, konsultatsiya_otdi: 0,
+        sotuv_boldi: 0, sotuv_sum: 0, sifat_rate: 0,
+        is_active: true,
+      });
+    }
 
     res.json({ month: monthParam, year: yearParam, creatives: result });
   } catch (err) {
@@ -1407,9 +1616,11 @@ router.get('/creatives', async (req, res) => {
   }
 });
 
-// ── /creative-deals — won deals for a specific adset (for sotuv_boldi drill-down) ─
+// ── /creative-deals — the won deals counted in a creative row's sotuv_boldi ───
+// Same attribution as /creatives (services/creativeSales.js): with ad_id it lists the
+// deals of that creative row, without it all deals of the adset (or campaign).
 router.get('/creative-deals', async (req, res) => {
-  const { adset_name, campaign_name, month, year } = req.query;
+  const { adset_name, campaign_name, ad_id, month, year } = req.query;
   if (!adset_name && !campaign_name) return res.status(400).json({ error: 'adset_name or campaign_name required' });
 
   const now = new Date();
@@ -1421,64 +1632,19 @@ router.get('/creative-deals', async (req, res) => {
   const days = new Date(yearNum, monthNum, 0).getDate();
   const since = req.query.from || `${yearNum}-${pad(monthNum)}-01`;
   const until = req.query.to   || `${yearNum}-${pad(monthNum)}-${pad(days)}`;
-  const hasSeparateSotuv = !!(req.query.sotuv_from || req.query.sotuv_to);
   const sotuvFrom = req.query.sotuv_from || since;
   const sotuvTo   = req.query.sotuv_to   || until;
 
   try {
-    // When sotuv dates are separate, skip the fl.created_time filter so we can
-    // show deals sold in the sotuv period regardless of when the lead arrived.
-    const { rows } = hasSeparateSotuv
-      ? await pool.query(`
-          SELECT DISTINCT ON (d.id)
-            d.id,
-            fl.phone,
-            r.name || ' ' || COALESCE(r.last_name, '') AS responsible,
-            d.opportunity,
-            d.currency_id,
-            d.date_create,
-            s.name AS stage_name
-          FROM facebook_leads fl
-          JOIN deal_phones dp
-            ON dp.phone_norm
-             = fl.phone_norm
-          JOIN deals  d  ON d.id = dp.deal_id
-          JOIN stages ds ON ds.id = d.stage_id AND ds.is_won = true
-          LEFT JOIN stages s ON s.id = d.stage_id
-          LEFT JOIN responsibles r ON r.id = d.responsible_id
-          WHERE d.uf_bp_sale_date >= $1::date
-            AND d.uf_bp_sale_date <= $2::date
-            ${adset_name ? "AND fl.adset_name = $3" : "AND fl.campaign_name = $3"}
-          ORDER BY d.id, d.date_create DESC
-        `, [sotuvFrom, sotuvTo, adset_name || campaign_name])
-      : await pool.query(`
-          SELECT DISTINCT ON (d.id)
-            d.id,
-            fl.phone,
-            r.name || ' ' || COALESCE(r.last_name, '') AS responsible,
-            d.opportunity,
-            d.currency_id,
-            d.date_create,
-            s.name AS stage_name
-          FROM facebook_leads fl
-          JOIN deal_phones dp
-            ON dp.phone_norm
-             = fl.phone_norm
-          JOIN deals  d  ON d.id = dp.deal_id
-          JOIN stages ds ON ds.id = d.stage_id AND ds.is_won = true
-          LEFT JOIN stages s ON s.id = d.stage_id
-          LEFT JOIN responsibles r ON r.id = d.responsible_id
-          WHERE (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date >= $1::date
-            AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date <= $2::date
-            AND d.uf_bp_sale_date >= $3::date
-            AND d.uf_bp_sale_date <= $4::date
-            ${adset_name ? "AND fl.adset_name = $5" : "AND fl.campaign_name = $5"}
-          ORDER BY d.id, d.date_create DESC
-        `, [since, until, sotuvFrom, sotuvTo, adset_name || campaign_name]);
+    const sales = await attributedSales(pool, { since, until, sotuvFrom, sotuvTo });
+    const rows = sales.filter(s =>
+      (!adset_name    || s.adset_name === adset_name) &&
+      (!campaign_name || s.campaign_name === campaign_name) &&
+      (!ad_id         || s.row_ad_id === ad_id));
 
     res.json({
       deals: rows.map(r => ({
-        id:          r.id,
+        id:          r.deal_id,
         phone:       r.phone || '—',
         responsible: r.responsible?.trim() || '—',
         opportunity: parseFloat(r.opportunity) || 0,
@@ -1516,6 +1682,16 @@ router.get('/creative-leads', async (req, res) => {
           AND (created_time AT TIME ZONE 'Asia/Tashkent')::date BETWEEN $2::date AND $3::date
         GROUP BY last9
         HAVING COUNT(*) > 1
+      ),
+      -- Same "latest card wins" rule as the creative row's counts (/creatives): a
+      -- phone has one newest Bitrix card (a returning contact's card is re-tagged
+      -- by each new submission), so the id and stage shown here are that card's,
+      -- not an arbitrary one among the phone's cards.
+      lead_latest AS (
+        SELECT DISTINCT ON (last9) last9, l.id, l.stage_id, l.utm_campaign FROM (
+          SELECT lp.phone_norm AS last9, lp.lead_id FROM lead_phones lp WHERE lp.phone_norm <> ''
+        ) p JOIN leads l ON l.id = p.lead_id
+        ORDER BY last9, l.date_create DESC NULLS LAST, l.id DESC
       )
       SELECT
         fl.id           AS fb_id,
@@ -1524,7 +1700,7 @@ router.get('/creative-leads', async (req, res) => {
         fl.created_time,
         fl.platform,
         fl.campaign_name,
-        l.id            AS bitrix_id,
+        ll.id           AS bitrix_id,
         s.name          AS stage_name,
         s.bitrix_id     AS stage_code,
         (dp.last9 IS NOT NULL) AS is_duplicate,
@@ -1533,11 +1709,10 @@ router.get('/creative-leads', async (req, res) => {
       FROM facebook_leads fl
       LEFT JOIN dup_phones dp
         ON fl.phone_norm = dp.last9
-      LEFT JOIN lead_phones lp
-        ON lp.phone_norm
-         = fl.phone_norm
-      LEFT JOIN leads  l ON l.id = lp.lead_id
-      LEFT JOIN stages s ON s.id = l.stage_id
+      LEFT JOIN lead_latest ll
+        ON ll.last9 = fl.phone_norm
+       AND fl.phone_norm <> ''
+      LEFT JOIN stages s ON s.id = ll.stage_id
       LEFT JOIN deal_phones dp2
         ON RIGHT(REGEXP_REPLACE(dp2.phone, '[^0-9]', '', 'g'), 9)
          = fl.phone_norm
@@ -1545,10 +1720,15 @@ router.get('/creative-leads', async (req, res) => {
       WHERE fl.adset_name = $1
         AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date >= $2::date
         AND (fl.created_time AT TIME ZONE 'Asia/Tashkent')::date <= $3::date
+        -- A creative row is one ad (ad_id) of one campaign. Several ads, even in
+        -- different campaigns, share an adset name, so without these the list
+        -- held the whole adset and disagreed with the row's own lead count.
+        AND ($4::text IS NULL OR fl.ad_id = $4::text)
+        AND ($5::text IS NULL OR fl.campaign_name = $5::text)
       GROUP BY fl.id, fl.full_name, fl.phone, fl.created_time, fl.platform, fl.campaign_name,
-               l.id, s.name, s.bitrix_id, dp.last9
+               ll.id, s.name, s.bitrix_id, dp.last9
       ORDER BY fl.created_time DESC
-    `, [adset_name, since, until]);
+    `, [adset_name, since, until, req.query.ad_id || null, req.query.campaign_name || null]);
 
     // Deduplicate: one facebook lead may match multiple phone entries
     const seen = new Set();
@@ -1609,7 +1789,12 @@ async function syncMetaAdDaily(sinceStr, untilStr) {
     for (const acct of allAccountIds()) {
       try {
         const whitelist = campaignWhitelist(acct);
-        const filtering = [{ field: 'campaign.objective', operator: 'IN', value: ['OUTCOME_LEADS', 'LEAD_GENERATION'] }];
+        // Keep historical traffic campaigns in the daily campaign table too.
+        // U-Mark's `Трафик 26.09 | ABO` is OUTCOME_TRAFFIC; excluding it here
+        // made its manual targetolog assignment invisible in the UI.
+        const filtering = [{ field: 'campaign.objective', operator: 'IN', value: [
+          'OUTCOME_LEADS', 'LEAD_GENERATION', 'OUTCOME_TRAFFIC',
+        ] }];
         if (whitelist) filtering.push({ field: 'campaign.id', operator: 'IN', value: whitelist });
         const rows = await paginate(`${BASE}/${acct}/insights`, {
           access_token:   token(),
@@ -1688,6 +1873,42 @@ setTimeout(() => {
   syncMetaAdDaily(daysAgoStr(30), todayStr()).catch(e => console.error('[meta_ad_daily] startup sync error:', e.message));
 }, 10_000);
 
+// ── meta_active_creatives sync — list running ads in the Creative tab ─────────
+// facebook_leads only knows ads that already produced a lead, so a new ad was
+// invisible until its first lead. One small /ads call per account (running and
+// in-review ads only — /ads shares the rate-limit pool noted in getAdFormIds),
+// so every 30 min. In-review ads are listed at once rather than after approval;
+// one that gets rejected drops out of the next fetch and is deactivated.
+const LISTED_AD_STATUSES = JSON.stringify(['ACTIVE', 'PENDING_REVIEW', 'IN_PROCESS', 'PREAPPROVED', 'WITH_ISSUES']);
+let activeCreativesSyncRunning = false;
+
+async function syncActiveCreativesAll() {
+  if (activeCreativesSyncRunning || !token()) return;
+  activeCreativesSyncRunning = true;
+  try {
+    for (const acct of allAccountIds()) {
+      try {
+        const ads = await paginate(`${BASE}/${acct}/ads`, {
+          access_token:     token(),
+          fields:           'id,name,created_time,campaign{id,name,objective},adset{id,name},creative{id,name}',
+          effective_status: LISTED_AD_STATUSES,
+          limit:            200,
+        });
+        const { upserted, deactivated } = await syncActiveCreatives(acct, ads, campaignWhitelist(acct));
+        console.log(`[active-creatives] acct=${acct} ${ads.length} running/in-review ads, ${upserted} listed, ${deactivated} deactivated`);
+      } catch (acctErr) {
+        // A failed account keeps its previous rows — never deactivate on an API error.
+        console.warn(`[active-creatives] acct=${acct} failed:`, acctErr.message);
+      }
+    }
+  } finally {
+    activeCreativesSyncRunning = false;
+  }
+}
+
+setInterval(() => syncActiveCreativesAll().catch(e => console.error('[active-creatives] sync error:', e.message)), 30 * 60_000);
+setTimeout(() => syncActiveCreativesAll().catch(e => console.error('[active-creatives] startup sync error:', e.message)), 45_000);
+
 // ── Build post URL from effective_object_story_id ({page_id}_{post_id}) ───────
 function buildPostUrl(storyId) {
   if (!storyId || !storyId.includes('_')) return null;
@@ -1720,13 +1941,22 @@ async function syncCreativeNames() {
     // Never-cached ad_ids go first (cc.ad_id IS NULL), so a backlog of brand-new
     // ads is never starved by ads stuck retrying for an unavailable post_url
     // (e.g. dynamic/Advantage+ creatives with no effective_object_story_id).
+    // Active ads with no lead yet (meta_active_creatives) are included so their
+    // thumbnail / post link resolve as soon as they appear in the Creative tab.
+    // Past never-cached ads, ads still missing a thumbnail go first, then the
+    // longest-unsynced: every cached row is older than 1h at any moment, and a
+    // rate-limited cycle can fail, so without an order the same 50 could be
+    // picked repeatedly while other rows' signed thumbnail URLs expire.
     const { rows: adRows } = await pool.query(`
-      SELECT DISTINCT fl.ad_id, (cc.ad_id IS NULL) AS is_new
-      FROM facebook_leads fl
-      LEFT JOIN meta_creative_cache cc ON cc.ad_id = fl.ad_id
-      WHERE fl.ad_id IS NOT NULL AND fl.ad_id != ''
-        AND (cc.ad_id IS NULL OR cc.synced_at < NOW() - INTERVAL '1 hour')
-      ORDER BY is_new DESC
+      SELECT a.ad_id, (cc.ad_id IS NULL) AS is_new
+      FROM (
+        SELECT ad_id FROM facebook_leads WHERE ad_id IS NOT NULL AND ad_id != ''
+        UNION
+        SELECT ad_id FROM meta_active_creatives WHERE status = 'ACTIVE'
+      ) a
+      LEFT JOIN meta_creative_cache cc ON cc.ad_id = a.ad_id
+      WHERE cc.ad_id IS NULL OR cc.synced_at < NOW() - INTERVAL '1 hour'
+      ORDER BY is_new DESC, (cc.thumbnail_url IS NULL) DESC, cc.synced_at ASC
       LIMIT 50
     `);
     if (!adRows.length) return;
@@ -1784,7 +2014,7 @@ async function syncCreativeNames() {
     if (igIds.length) {
       try {
         const res = await axios.get(`${BASE}/`, {
-          params: { ids: igIds.join(','), fields: 'permalink', access_token: tok },
+          params: { ids: igIds.join(','), fields: 'permalink,thumbnail_url', access_token: tok },
           timeout: 15000,
         });
         igData = res.data || {};
@@ -1799,7 +2029,7 @@ async function syncCreativeNames() {
     if (videoIds.length) {
       try {
         const res = await axios.get(`${BASE}/`, {
-          params: { ids: videoIds.join(','), fields: 'title,source,permalink_url', access_token: tok },
+          params: { ids: videoIds.join(','), fields: 'title,source,permalink_url,picture', access_token: tok },
           timeout: 15000,
         });
         videosData = res.data || {};
@@ -1815,6 +2045,11 @@ async function syncCreativeNames() {
       const videoSourceUrl = vid?.source || null;
 
       const instagramPostUrl = s.igMediaId ? (igData[s.igMediaId]?.permalink || null) : null;
+      // The batched ad lookup sometimes returns no creative.thumbnail_url for
+      // Instagram video ads; the video's own picture / the IG media thumbnail
+      // are the same frame, so fall back to them instead of showing no image.
+      const thumbnailUrl = s.thumbnailUrl || vid?.picture
+        || (s.igMediaId ? (igData[s.igMediaId]?.thumbnail_url || null) : null);
       const facebookPostUrl  = buildPostUrl(s.storyId)
         || (vid?.permalink_url ? (vid.permalink_url.startsWith('http') ? vid.permalink_url : `https://www.facebook.com${vid.permalink_url}`) : null);
 
@@ -1846,7 +2081,7 @@ async function syncCreativeNames() {
           effective_instagram_media_id = EXCLUDED.effective_instagram_media_id,
           synced_at                    = NOW()
       `, [
-        s.ad_id, s.creativeId, s.name, s.video_id, videoTitle, postUrl, s.thumbnailUrl, s.adsManagerUrl,
+        s.ad_id, s.creativeId, s.name, s.video_id, videoTitle, postUrl, thumbnailUrl, s.adsManagerUrl,
         platform, facebookPostUrl, instagramPostUrl, videoSourceUrl,
         s.storyId, s.igMediaId,
       ]).catch(() => {});
@@ -1873,11 +2108,16 @@ async function syncCreativeNames() {
 // query in syncCreativeNames already prioritizes never-cached ad_ids too).
 async function resyncMissingPostUrls() {
   try {
+    // A missing thumbnail is retried much sooner than a missing post_url: Meta
+    // often has no thumbnail on the first fetch of a brand-new ad and returns
+    // it a little later, while a missing post_url is usually permanent.
     await pool.query(`
       UPDATE meta_creative_cache
       SET synced_at = '2000-01-01'
-      WHERE (post_url IS NULL OR thumbnail_url IS NULL) AND creative_id IS NOT NULL
-        AND synced_at < NOW() - INTERVAL '6 hours'
+      WHERE creative_id IS NOT NULL AND (
+        (thumbnail_url IS NULL AND synced_at < NOW() - INTERVAL '30 minutes')
+        OR (post_url IS NULL AND synced_at < NOW() - INTERVAL '6 hours')
+      )
     `);
   } catch (_) {}
 }
@@ -1930,6 +2170,73 @@ router.get('/uf-field-options', async (req, res) => {
 });
 
 // ── Campaign targetolog management ────────────────────────────────
+// Keep targetologs in the same database as campaign overrides so the
+// Settings page can manage the list without requiring a redeploy.
+pool.query(`
+  CREATE TABLE IF NOT EXISTS targetologs (
+    key        TEXT PRIMARY KEY,
+    label      TEXT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT NOW()
+  )
+`).then(async () => {
+  await pool.query(`
+    INSERT INTO targetologs (key, label) VALUES
+      ('dilmurod', 'Dilmurod'),
+      ('u-mark', 'U-Mark')
+    ON CONFLICT (key) DO NOTHING
+  `);
+}).catch(err => console.error('[campaigns] targetolog table init:', err.message));
+
+// GET /api/campaigns/targetologs
+router.get('/targetologs', async (_req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `SELECT key, label FROM targetologs ORDER BY created_at ASC, label ASC`
+    );
+    res.json(rows);
+  } catch (err) {
+    console.error('[targetologs]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// POST /api/campaigns/targetologs { key, label }
+router.post('/targetologs', async (req, res) => {
+  const key = String(req.body?.key || '').trim().toLowerCase();
+  const label = String(req.body?.label || '').trim();
+  if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(key)) {
+    return res.status(400).json({ error: 'key must contain lowercase letters, numbers, and hyphens only' });
+  }
+  if (!label) return res.status(400).json({ error: 'label required' });
+  try {
+    const { rows } = await pool.query(
+      `INSERT INTO targetologs (key, label) VALUES ($1, $2)
+       RETURNING key, label`, [key, label]
+    );
+    res.status(201).json(rows[0]);
+  } catch (err) {
+    if (err.code === '23505') return res.status(409).json({ error: 'targetolog already exists' });
+    console.error('[targetolog create]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// DELETE /api/campaigns/targetologs/:key
+router.delete('/targetologs/:key', async (req, res) => {
+  const key = String(req.params.key || '').trim().toLowerCase();
+  try {
+    const { rowCount } = await pool.query(`DELETE FROM targetologs WHERE key = $1`, [key]);
+    if (!rowCount) return res.status(404).json({ error: 'targetolog not found' });
+    await pool.query(
+      `UPDATE campaign_targetolog_overrides SET targetolog = NULL WHERE targetolog = $1`, [key]
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    console.error('[targetolog delete]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // GET /api/campaigns/campaign-assignments
 router.get('/campaign-assignments', async (_req, res) => {
   try {
@@ -1947,6 +2254,22 @@ router.get('/campaign-assignments', async (_req, res) => {
       `SELECT campaign_name, targetolog FROM campaign_targetolog_overrides`
     );
     const overrideMap = Object.fromEntries(overrides.map(o => [o.campaign_name, o.targetolog]));
+
+    // Merge live ACTIVE campaigns from Meta into the DB-backed rows. This is
+    // what makes a just-created campaign appear as unassigned immediately,
+    // even before the hourly/daily insight sync has written any rows.
+    const activeCampaigns = await fetchActiveCampaigns();
+    const dbMap = new Map(campaigns.map(c => [c.campaign_name, c]));
+    for (const active of activeCampaigns) {
+      if (!dbMap.has(active.campaign_name)) {
+        campaigns.push({
+          campaign_name: active.campaign_name,
+          total_leads: 0,
+          total_spend: 0,
+          last_date: null,
+        });
+      }
+    }
 
     const result = campaigns.map(c => ({
       campaign_name: c.campaign_name,
@@ -1982,7 +2305,8 @@ router.get('/campaign-assignments', async (_req, res) => {
 router.post('/campaign-assign', async (req, res) => {
   const { campaign_name, targetolog } = req.body || {};
   if (!campaign_name) return res.status(400).json({ error: 'campaign_name required' });
-  const valid = ['dilmurod', 'u-mark'];
+  const { rows: targetologRows } = await pool.query(`SELECT key FROM targetologs`);
+  const valid = targetologRows.map(row => row.key);
   // null/undefined = explicitly unassigned (shown in "Biriktirilmagan")
   if (targetolog !== null && targetolog !== undefined && targetolog !== '' && !valid.includes(targetolog))
     return res.status(400).json({ error: 'invalid targetolog' });

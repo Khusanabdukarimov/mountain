@@ -1,4 +1,5 @@
 import { getStoredToken, clearStoredToken } from '@/lib/auth';
+import { reportSubscriptionExpired } from '@/lib/subscriptionEvents';
 
 export class ApiError extends Error {
   status: number;
@@ -46,6 +47,7 @@ export async function apiGet<T>(
   if (!res.ok) {
     let payload: unknown = null;
     try { payload = await res.json(); } catch { /* ignore */ }
+    reportSubscriptionExpired(res.status, payload);
     throw new ApiError(`${res.status} ${res.statusText}`, res.status, payload);
   }
   return res.json() as Promise<T>;
@@ -65,5 +67,6 @@ export async function authedFetch(
   const headers = { ...(init.headers as Record<string, string> | undefined ?? {}), ...authHeaders() };
   const res = await window.fetch(finalInput, { ...init, headers });
   if (res.status === 401) handle401();
+  if (res.status === 402) res.clone().json().then(p => reportSubscriptionExpired(402, p)).catch(() => { /* not JSON */ });
   return res;
 }

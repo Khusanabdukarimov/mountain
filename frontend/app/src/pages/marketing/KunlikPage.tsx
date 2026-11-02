@@ -9,6 +9,7 @@ import {
   saveKunlikPlan, saveKunlikOverride,
   getKunlikSections, createKunlikSection, deleteKunlikSection, getKunlikSegment,
   getKunlikJamiStats, getUfFieldOptions,
+  getTargetologs,
   MONTH_KEYS, MONTH_LABELS,
 } from "@/lib/api/meta";
 import type { MonthKey, KunlikCustomSection } from "@/lib/api/meta";
@@ -24,7 +25,7 @@ const CUSTOM_COLORS = ["#6366f1", "#0891b2", "#059669", "#d97706", "#dc2626", "#
 
 type MetricKey =
   | "budget" | "leads" | "qual_leads" | "meetings_set" | "meetings" | "meeting_conversion"
-  | "deals"  | "deals_sum" | "sales_count" | "sales_sum" | "cancelled"
+  | "deals"  | "deals_sum" | "sales_count" | "sales_sum" | "average_check" | "cancelled"
   | "sifatsiz"
   | "tolangan"
   | "roas" | "qual_lead_cost" | "qual_conversion" | "customer_cost";
@@ -49,6 +50,7 @@ const METRICS: MetricDef[] = [
   { key: "deals_sum",      label: "Kelishuvlar summasi",  format: "money" },
   { key: "sales_count",    label: "Sotuvlar soni",        format: "num"   },
   { key: "sales_sum",      label: "Sotuvlar summasi",     format: "money" },
+  { key: "average_check",  label: "O'rtacha check",        format: "money", computed: true },
   { key: "cancelled",      label: "Bekor bo'ldi",         format: "num"   },
   { key: "sifatsiz",       label: "Sifatsiz",             format: "num"   },
   { key: "roas",           label: "ROAS",                 format: "pct",  computed: true },
@@ -109,6 +111,7 @@ export default function KunlikPage() {
   const qCrm      = useQuery({ queryKey: ["marketing/kunlik", month, year, targetologs, masulIds], queryFn: () => getKunlikHisobot(month, year, targetologs, masulIds) });
   const qPlan     = useQuery({ queryKey: ["marketing/kunlik-meta", month, year], queryFn: () => getKunlikMeta(month, year) });
   const qSections = useQuery({ queryKey: ["kunlik-sections"], queryFn: getKunlikSections, staleTime: Infinity });
+  const qTargetologs = useQuery({ queryKey: ["targetologs"], queryFn: getTargetologs, staleTime: 60_000 });
 
   const qJamiStats = useQuery({
     queryKey: ["kunlik-jami-stats", month, year, masulIds],
@@ -203,6 +206,10 @@ export default function KunlikPage() {
       case "deals_sum":   return field("deals_sum",   b.deals_sum);
       case "sales_count": return field("sales_count", b.sales_count);
       case "sales_sum":   return field("sales_sum",   b.sales_sum);
+      case "average_check": {
+        const s = field("sales_sum", b.sales_sum), c = field("sales_count", b.sales_count);
+        return c > 0 ? s / c : 0;
+      }
       case "cancelled":   return field("cancelled",   b.cancelled);
       case "sifatsiz":    return field("sifatsiz",    b.sifatsiz);
       case "roas": {
@@ -255,6 +262,10 @@ export default function KunlikPage() {
         const bg = sumField("budget"), sc = sumField("sales_count");
         return sc > 0 ? bg / sc : 0;
       }
+      case "average_check": {
+        const s = sumField("sales_sum"), c = sumField("sales_count");
+        return c > 0 ? s / c : 0;
+      }
       default:
         return Array.from({length: days}, (_, i) => cellValue(src as Section, metric, i)).reduce((a,v)=>a+v,0);
     }
@@ -295,6 +306,10 @@ export default function KunlikPage() {
   // summing raw autoData would silently drop everything entered manually.
   function jamiCellValue(metric: MetricDef, i: number): number {
     const sectionKeys = allSections.filter(s => s.key !== "jami").map(s => s.key);
+    if (metric.key === "sales_sum") {
+      const allSourceDaily = qCrm.data?.data?.jami?.sales_sum;
+      if (allSourceDaily) return allSourceDaily[i] ?? 0;
+    }
     const sumField = (key: MetricKey): number =>
       sectionKeys.reduce(
         (sum, src) => sum + cellValue(src, { key, label: "", format: "num" } as MetricDef, i),
@@ -322,6 +337,10 @@ export default function KunlikPage() {
         const bg = sumField("budget"), sc = sumField("sales_count");
         return sc > 0 ? bg / sc : 0;
       }
+      case "average_check": {
+        const s = sumField("sales_sum"), c = sumField("sales_count");
+        return c > 0 ? s / c : 0;
+      }
       default:
         return sumField(metric.key);
     }
@@ -329,6 +348,7 @@ export default function KunlikPage() {
 
   function jamiFaktTotal(metric: MetricDef): number {
     const js = qJamiStats.data;
+    if (metric.key === "sales_sum") return js?.sales_sum ?? 0;
     // To'langan has no daily basis — keep the overall DB total.
     if (metric.key === "tolangan") return js ? js.total_paid : 0;
     // Everything else: FAKT = sum of the Jami daily cells, so the total always
@@ -358,6 +378,10 @@ export default function KunlikPage() {
         const bg = sumDays("budget"), sc = sumDays("sales_count");
         return sc > 0 ? bg / sc : 0;
       }
+      case "average_check": {
+        const s = sumDays("sales_sum"), c = sumDays("sales_count");
+        return c > 0 ? s / c : 0;
+      }
       default:
         return sumDays(metric.key);
     }
@@ -365,10 +389,15 @@ export default function KunlikPage() {
   const isLoading = (qMeta.isLoading && !qMeta.data) || (qCrm.isLoading && !qCrm.data);
   const yearOptions = [DEFAULT_YEAR, DEFAULT_YEAR - 1, DEFAULT_YEAR - 2];
 
-  const TARGETOLOG_OPTIONS = [
-    { value: "u-mark",   label: "U-Mark"   },
-    { value: "dilmurod", label: "Dilmurod" },
-  ];
+  const TARGETOLOG_OPTIONS = useMemo(() => {
+    const loaded = qTargetologs.data ?? [];
+    return loaded.length > 0
+      ? loaded.map(t => ({ value: t.key, label: t.label }))
+      : [
+          { value: "u-mark",   label: "U-Mark"   },
+          { value: "dilmurod", label: "Dilmurod" },
+        ];
+  }, [qTargetologs.data]);
   const MASUL_OPTIONS = [
     { value: 16, label: "Davlatyor" },
     { value: 32, label: "Temurmalik Xoshimjonov" },
@@ -838,6 +867,43 @@ function SectionRows({
   onHideMetric?: (key: MetricKey) => void;
 }) {
   const totalCols = days + 4; // name + reja + fakt + var%
+  const leadsTotal = faktTotal({ key: "leads", format: "num" } as MetricDef);
+  const qualifiedTotal = faktTotal({ key: "qual_leads", format: "num" } as MetricDef);
+  const meetingsSetTotal = faktTotal({ key: "meetings_set", format: "num" } as MetricDef);
+  const meetingsTotal = faktTotal({ key: "meetings", format: "num" } as MetricDef);
+  const salesTotal = faktTotal({ key: "sales_count", format: "num" } as MetricDef);
+  const conversionFor = (metric: MetricDef): { value: number | null; title: string } | undefined => {
+    // The Var% badge is used here as a funnel-conversion indicator for these
+    // rows, rather than plan attainment.
+    if (metric.key === "qual_leads") {
+      const value = leadsTotal > 0 ? (qualifiedTotal / leadsTotal) * 100 : null;
+      return {
+        value,
+        title: value == null
+          ? "Maqsadli lidlar ÷ Lidlar soni × 100"
+          : `Maqsadli lidlar ÷ Lidlar soni × 100\n${fmtNum(qualifiedTotal)} ÷ ${fmtNum(leadsTotal)} × 100 = ${fmtPct(value, 2)}`,
+      };
+    }
+    if (metric.key === "meetings") {
+      const value = meetingsSetTotal > 0 ? (meetingsTotal / meetingsSetTotal) * 100 : null;
+      return {
+        value,
+        title: value == null
+          ? "Uchrashuv o'tkazildi ÷ Uchrashuv belgilandi × 100"
+          : `Uchrashuv o'tkazildi ÷ Uchrashuv belgilandi × 100\n${fmtNum(meetingsTotal)} ÷ ${fmtNum(meetingsSetTotal)} × 100 = ${fmtPct(value, 2)}`,
+      };
+    }
+    if (metric.key === "sales_count") {
+      const value = meetingsTotal > 0 ? (salesTotal / meetingsTotal) * 100 : null;
+      return {
+        value,
+        title: value == null
+          ? "Sotuvlar soni ÷ Uchrashuv o'tkazildi × 100"
+          : `Sotuvlar soni ÷ Uchrashuv o'tkazildi × 100\n${fmtNum(salesTotal)} ÷ ${fmtNum(meetingsTotal)} × 100 = ${fmtPct(value, 2)}`,
+      };
+    }
+    return undefined;
+  };
   return (
     <>
       {/* Section header */}
@@ -867,6 +933,7 @@ function SectionRows({
           todayDay={todayDay}
           planValue={plans?.[metric.key]}
           faktValue={faktTotal(metric)}
+          percentageOverride={conversionFor(metric)}
           overrides={overrides?.[metric.key]}
           cellValue={cellValue}
           onPlanSave={(val) => onPlanSave(metric.key, val)}
@@ -880,7 +947,7 @@ function SectionRows({
 
 function MetricRow({
   metric, days, isCurrent, todayDay,
-  planValue, faktValue, overrides, cellValue,
+  planValue, faktValue, percentageOverride, overrides, cellValue,
   onPlanSave, onCellSave, onHide,
 }: {
   metric:      MetricDef;
@@ -889,6 +956,7 @@ function MetricRow({
   todayDay:    number;
   planValue:   number | undefined;
   faktValue:   number;
+  percentageOverride: { value: number | null; title: string } | undefined;
   overrides:   Record<number, number> | undefined;
   cellValue:   (m: MetricDef, i: number) => number;
   onPlanSave:  (val: number) => Promise<void>;
@@ -903,7 +971,12 @@ function MetricRow({
   const dayRef         = useRef<HTMLInputElement>(null);
   const planCommitting = useRef(false);
 
-  const vp = varPct(faktValue, planValue);
+  const vp = percentageOverride ? percentageOverride.value : varPct(faktValue, planValue);
+  const vpTitle = percentageOverride?.title ?? (
+    vp != null && planValue
+      ? `Fakt ÷ Oylik reja × 100\n${faktValue} ÷ ${planValue} × 100 = ${fmtPct(vp, 2)}`
+      : undefined
+  );
   const vpBg = vp == null ? "transparent"
     : vp >= 90  ? "rgba(22,163,74,0.18)"
     : vp >= 50  ? "rgba(217,119,6,0.18)"
@@ -1005,9 +1078,9 @@ function MetricRow({
       {/* Var % */}
       <td className="px-3 py-2 border-l border-border text-center">
         {vp != null ? (
-          <span className="text-[11.5px] font-bold px-2.5 py-0.5 rounded"
+          <span title={vpTitle} className="text-[11.5px] font-bold px-2.5 py-0.5 rounded cursor-help"
             style={{ color: vpColor, background: vpBg }}>
-            {vp}%
+            {fmtPct(vp, 2)}
           </span>
         ) : <span className="text-text3 text-[11px]">—</span>}
       </td>

@@ -10,6 +10,8 @@ export type RejaPlan = {
   period_type: PeriodType;
   period_start: string;
   period_end: string;
+  /** Date the weekly columns are counted from (monthly plans); null = the plan's own start. */
+  week_start: string | null;
   total_target: number;
   employee_count: number;
   distributed_total: number;
@@ -86,14 +88,17 @@ export async function createRejaPlan(body: {
 
 export async function updateRejaPlan(
   id: number,
-  body: { name?: string; total_target?: number; period_start?: string; period_end?: string },
+  body: { name?: string; total_target?: number; period_start?: string; period_end?: string; week_start?: string | null },
 ): Promise<RejaPlan> {
   const res = await authedFetch(`/api/reja/plans/${id}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   }, API_URL_CRM);
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) {
+    const payload = await res.json().catch(() => ({}));
+    throw new Error(payload.error || `${res.status} ${res.statusText}`);
+  }
   return res.json();
 }
 

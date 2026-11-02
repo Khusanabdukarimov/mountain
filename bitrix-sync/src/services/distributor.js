@@ -1,5 +1,6 @@
 const pool = require('../db/pool');
 const { bitrixCall } = require('./bitrix');
+const { getStatus: getSubscriptionStatus } = require('../middleware/subscription');
 
 /**
  * Distribute a new lead to the responsible with the largest deficit.
@@ -15,22 +16,47 @@ const { bitrixCall } = require('./bitrix');
  * @returns {Promise<number|null>} responsible_id assigned, or null
  */
 async function distributeLead(leadId) {
+  // Distribution is part of the subscription: once it has expired, new leads are
+  // received and stored but not handed to operators (they stay on the main
+  // account), and it resumes by itself when the subscription is extended — see
+  // middleware/subscription.js and scripts/set_subscription.js. Every caller
+  // (leadCreated, the Facebook webhook) goes through here.
+  if ((await getSubscriptionStatus()).expired) {
+    console.log(`[distributor] Lead ${leadId} NOT distributed: subscription expired, distribution is paused`);
+    return null;
+  }
+
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
     await client.query('SELECT pg_advisory_xact_lock(12345)');
 
+    const { rows: leadRows } = await client.query('SELECT 1 FROM leads WHERE id = $1', [leadId]);
+    if (!leadRows.length) {
+      await client.query('ROLLBACK');
+      return null;
+    }
+
+    const { rows: alreadyAssigned } = await client.query(
+      'SELECT responsible_id FROM taqsimot_assignments WHERE lead_id = $1', [leadId]
+    );
+    if (alreadyAssigned.length) {
+      await client.query('COMMIT');
+      return Number(alreadyAssigned[0].responsible_id);
+    }
+
     const { rows: distributors } = await client.query(`
       SELECT
         r.id,
         r.name,
-        r.taqsimot_pct,
+        r.taqsimot_pct AS taqsimot_pct,
         COUNT(l.id)::int AS today_count
       FROM responsibles r
       LEFT JOIN leads l ON l.responsible_id = r.id
         AND l.date_create >= date_trunc('day', NOW() AT TIME ZONE 'Asia/Tashkent') AT TIME ZONE 'Asia/Tashkent'
         AND (l.source_id IS NULL OR l.source_id != 'UC_1WUFJB')
       WHERE r.taqsimot_pct > 0
+        AND r.id IN (SELECT responsible_id FROM taqsimot_members)
         AND r.active = TRUE
       GROUP BY r.id, r.name, r.taqsimot_pct
       ORDER BY r.id
@@ -48,11 +74,12 @@ async function distributeLead(leadId) {
     let bestName = '';
     let maxDeficit = -Infinity;
     let minCount   = Infinity;
+    const pctTotal = distributors.reduce((sum, row) => sum + parseFloat(row.taqsimot_pct), 0);
 
     for (const d of distributors) {
       const pct      = parseFloat(d.taqsimot_pct);
       const actual   = d.today_count;
-      const deficit  = (pct / 100) * (totalToday + 1) - actual;
+      const deficit  = (pct / pctTotal) * (totalToday + 1) - actual;
 
       if (deficit > maxDeficit || (deficit === maxDeficit && actual < minCount)) {
         maxDeficit = deficit;
@@ -65,6 +92,13 @@ async function distributeLead(leadId) {
     await client.query(
       'UPDATE leads SET responsible_id = $1 WHERE id = $2',
       [bestId, leadId]
+    );
+    await client.query(
+      `INSERT INTO taqsimot_assignments (lead_id, responsible_id)
+       VALUES ($1, $2)
+       ON CONFLICT (lead_id) DO UPDATE SET responsible_id = EXCLUDED.responsible_id,
+                                      campaign_name = NULL, assigned_at = NOW()`,
+      [leadId, bestId]
     );
 
     await client.query('COMMIT');

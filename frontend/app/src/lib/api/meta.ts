@@ -59,6 +59,7 @@ export type KunlikResponse = {
     target: KunlikRow;
     instagram: KunlikRow;
     unmatched: UnmatchedRow;
+    jami?: { sales_sum: number[] };
   };
 };
 
@@ -381,11 +382,13 @@ export type CreativeDeal = {
   stage:       string;
 };
 
-export function getCreativeDeals(adset_name: string, month: MonthKey, year: number, from?: string, to?: string, sotuvFrom?: string, sotuvTo?: string) {
+export function getCreativeDeals(adset_name: string, month: MonthKey, year: number, from?: string, to?: string, sotuvFrom?: string, sotuvTo?: string, row?: { adId?: string | null; campaignName?: string }) {
   return apiGet<{ deals: CreativeDeal[] }>(
     '/api/campaigns/creative-deals',
     {
       adset_name, month, year,
+      ...(row?.adId        ? { ad_id: row.adId }                 : {}),
+      ...(row?.campaignName ? { campaign_name: row.campaignName } : {}),
       ...(from      ? { from }               : {}),
       ...(to        ? { to }                 : {}),
       ...(sotuvFrom ? { sotuv_from: sotuvFrom } : {}),
@@ -418,19 +421,57 @@ export function getCampaignFormStats(from?: string, to?: string, formIds?: strin
   });
 }
 
-export function getCreativeLeads(adset_name: string, month: MonthKey, year: number, from?: string, to?: string) {
+// Distinct (day, person) "sifatli" over exactly the slice on screen — the figure
+// Kunlik hisobot shows for the same campaigns (a sum of table rows overcounts a
+// person who applied to two ads the same day). Omit a scope key for "everything".
+export function getSifatliTotal(
+  from: string, to: string,
+  scope: { campaigns?: string[]; adIds?: string[]; formIds?: string[] } = {},
+) {
+  return apiGet<{ total: number }>('/api/campaigns/sifatli-total', {
+    from, to,
+    ...(scope.campaigns ? { campaigns: JSON.stringify(scope.campaigns) } : {}),
+    ...(scope.adIds     ? { ad_ids:    JSON.stringify(scope.adIds) }     : {}),
+    ...(scope.formIds   ? { form_ids:  JSON.stringify(scope.formIds) }   : {}),
+  });
+}
+
+export function getCreativeLeads(
+  adset_name: string, month: MonthKey, year: number, from?: string, to?: string,
+  ad_id?: string | null, campaign_name?: string,
+) {
   return apiGet<{ adset_name: string; leads: CreativeLead[] }>(
     '/api/campaigns/creative-leads',
     {
       adset_name, month, year,
       ...(from ? { from } : {}),
       ...(to   ? { to }   : {}),
+      // One creative row = one ad of one campaign; adset names are shared.
+      ...(ad_id ? { ad_id } : {}),
+      ...(campaign_name ? { campaign_name } : {}),
     },
   );
 }
 
 
 // ── Campaign targetolog management ────────────────────────────────
+export type Targetolog = { key: string; label: string };
+
+export function getTargetologs() {
+  return apiGet<Targetolog[]>('/api/campaigns/targetologs', undefined, API_URL_CRM);
+}
+
+export async function createTargetolog(key: string, label: string) {
+  const { authedFetch, API_URL_CRM } = await import('./client');
+  const res = await authedFetch('/api/campaigns/targetologs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ key, label }),
+  }, API_URL_CRM);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json() as Promise<Targetolog>;
+}
+
 export type CampaignAssignment = {
   campaign_name: string;
   total_leads:   number;

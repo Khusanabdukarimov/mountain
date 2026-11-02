@@ -28,6 +28,11 @@ app.disable('etag'); // Prevent 304 responses with stale cached API data
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
+// Subscription expiry guard for /api/* — before auth, so a locked dashboard
+// answers 402 even to a client that is not logged in. /webhook/* is not touched.
+const { subscriptionGuard, ensureTable: ensureSubscriptionTable } = require('./middleware/subscription');
+app.use(subscriptionGuard);
+
 // JWT auth for /api/* (no-op unless AUTH_ENABLED=true + JWT_SECRET set)
 const { authMiddleware } = require('./middleware/auth');
 app.use(authMiddleware);
@@ -72,6 +77,49 @@ app.get('/health', async (req, res) => {
 
 // Run all migrations before accepting connections
 Promise.all([
+  ensureSubscriptionTable().catch(err => console.error('[startup] app_subscription migration failed:', err.message)),
+  pool.query(`
+    ALTER TABLE responsibles ADD COLUMN IF NOT EXISTS taqsimot_enabled BOOLEAN;
+    UPDATE responsibles
+      SET taqsimot_enabled = (
+        COALESCE(taqsimot_pct, 0) > 0
+        OR LOWER(COALESCE(work_position, '')) LIKE '%hunter%'
+        OR LOWER(COALESCE(work_position, '')) LIKE '%closer%'
+      )
+      WHERE taqsimot_enabled IS NULL;
+    ALTER TABLE responsibles ALTER COLUMN taqsimot_enabled SET DEFAULT FALSE;
+    ALTER TABLE responsibles ALTER COLUMN taqsimot_enabled SET NOT NULL;
+    CREATE TABLE IF NOT EXISTS taqsimot_members (
+      responsible_id BIGINT PRIMARY KEY
+    );
+    INSERT INTO taqsimot_members (responsible_id)
+      SELECT id FROM responsibles WHERE id IN (74, 16, 20, 32)
+      ON CONFLICT (responsible_id) DO NOTHING;
+    ALTER TABLE responsibles ADD COLUMN IF NOT EXISTS taqsimot_campaign_pct NUMERIC(5,2) NOT NULL DEFAULT 0;
+    CREATE TABLE IF NOT EXISTS taqsimot_campaign_settings (
+      campaign_name TEXT PRIMARY KEY,
+      active BOOLEAN NOT NULL DEFAULT FALSE
+    );
+    INSERT INTO taqsimot_campaign_settings (campaign_name, active)
+      VALUES ('AN-JiDDi || TOF || Broad || ABO || 30$ || UZB', FALSE)
+      ON CONFLICT (campaign_name) DO NOTHING;
+    CREATE TABLE IF NOT EXISTS taqsimot_campaign_members (
+      campaign_name TEXT NOT NULL REFERENCES taqsimot_campaign_settings(campaign_name) ON DELETE CASCADE,
+      responsible_id BIGINT NOT NULL,
+      pct NUMERIC(5,2) NOT NULL DEFAULT 0,
+      PRIMARY KEY (campaign_name, responsible_id)
+    );
+    INSERT INTO taqsimot_campaign_members (campaign_name, responsible_id, pct)
+      SELECT 'AN-JiDDi || TOF || Broad || ABO || 30$ || UZB', id, taqsimot_campaign_pct
+      FROM responsibles WHERE id IN (74, 16, 20, 32)
+      ON CONFLICT (campaign_name, responsible_id) DO NOTHING;
+    CREATE TABLE IF NOT EXISTS taqsimot_assignments (
+      lead_id BIGINT PRIMARY KEY,
+      responsible_id BIGINT NOT NULL,
+      campaign_name TEXT,
+      assigned_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+  `).catch(err => console.error('[startup] taqsimot membership migration failed:', err.message)),
   pool.query(`
     ALTER TABLE leads ADD COLUMN IF NOT EXISTS uf_amo_date TIMESTAMPTZ;
     CREATE INDEX IF NOT EXISTS leads_uf_amo_date_idx ON leads(uf_amo_date);
@@ -94,6 +142,13 @@ Promise.all([
     -- ENTERED that stage in a period, which the current stage_id alone cannot
     -- answer once a deal has moved on to Sotuv bo'ldi.
     ALTER TABLE deals ADD COLUMN IF NOT EXISTS uf_kelishuv_date TIMESTAMPTZ;
+    -- The deal card's own UTM_CAMPAIGN. A deal created without a lead (e.g. a
+    -- returning customer's new deal) has no lead to inherit the campaign from,
+    -- so Kunlik attributes it to a targetolog through this column.
+    ALTER TABLE deals ADD COLUMN IF NOT EXISTS utm_campaign TEXT;
+    -- UTM_CONTENT carries the adset name, so the Creative tab can attribute a
+    -- lead-less deal to its adset the same way.
+    ALTER TABLE deals ADD COLUMN IF NOT EXISTS utm_content  TEXT;
     CREATE INDEX IF NOT EXISTS deals_date_modify_idx      ON deals(date_modify);
     CREATE INDEX IF NOT EXISTS deals_uf_sale_date_idx     ON deals(uf_sale_date);
     CREATE INDEX IF NOT EXISTS deals_uf_bp_sale_date_idx  ON deals(uf_bp_sale_date);
@@ -196,6 +251,16 @@ Promise.all([
       scheduleSheetLeadsPoll();
     } catch (e) {
       console.error('[sheet-leads] failed to schedule:', e.message);
+    }
+
+    // Meta lead-form submissions → Bitrix leads (har daqiqada). Connector bir necha
+    // soniyada o'zi lead yaratadi; 2 daqiqadan keyin ham lead bo'lmagan submissionlar
+    // (connector uzilgan, yangi forma) shu yerda yaratiladi va oddiy taqsimotdan o'tadi.
+    try {
+      const { scheduleFacebookLeadCreation } = require('./sync/facebookLeads');
+      scheduleFacebookLeadCreation();
+    } catch (e) {
+      console.error('[facebook-leads] failed to schedule:', e.message);
     }
 
     // Daily user sync (01:30 Tashkent) — mirrors the Bitrix user directory into

@@ -1217,20 +1217,64 @@ router.get('/lead-filter-options', async (req, res) => {
 
 /**
  * GET /api/dashboard/taqsimot
- * Returns all active responsibles with their taqsimot_pct values.
+ * Returns active responsibles and whether they are included in the allocation table.
  */
 router.get('/taqsimot', async (_req, res) => {
   try {
     const { rows } = await pool.query(
       `SELECT r.id, TRIM(COALESCE(r.name,'') || ' ' || COALESCE(r.last_name,'')) AS full_name,
-              r.email, r.work_position, r.taqsimot_pct
+              r.email, r.work_position, r.taqsimot_pct, r.taqsimot_campaign_pct, r.taqsimot_enabled
        FROM responsibles r
-       WHERE r.active = TRUE
+       WHERE r.active = TRUE AND r.id IN (SELECT responsible_id FROM taqsimot_members)
        ORDER BY r.name`
     );
     res.json({ responsibles: rows });
   } catch (err) {
     console.error('[dashboard/taqsimot GET]', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+router.get('/taqsimot-candidates', async (_req, res) => {
+  try {
+    const { rows } = await pool.query(`
+      SELECT r.id, TRIM(COALESCE(r.name,'') || ' ' || COALESCE(r.last_name,'')) AS full_name,
+             r.email, r.work_position, r.taqsimot_pct, r.taqsimot_enabled
+      FROM responsibles r WHERE r.active = TRUE
+        AND NOT EXISTS (SELECT 1 FROM taqsimot_members m WHERE m.responsible_id = r.id)
+      ORDER BY r.name
+    `);
+    res.json({ responsibles: rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+/**
+ * POST /api/dashboard/taqsimot/:id/add
+ * Adds an active responsible to the allocation table with the chosen percentage.
+ */
+router.post('/taqsimot/:id/add', async (req, res) => {
+  const id = parseInt(req.params.id, 10);
+  const pct = parseFloat(req.body?.taqsimot_pct ?? 0);
+  if (isNaN(id) || !Number.isFinite(pct) || pct < 0 || pct > 100) {
+    return res.status(400).json({ error: 'Invalid responsible id or taqsimot_pct (0–100)' });
+  }
+  try {
+    const { rows: added } = await pool.query(`
+      INSERT INTO taqsimot_members (responsible_id)
+      SELECT id FROM responsibles WHERE id = $1 AND active = TRUE
+      ON CONFLICT DO NOTHING RETURNING responsible_id
+    `, [id]);
+    if (!added.length) return res.status(409).json({ error: 'Mas’ul topilmadi yoki allaqachon qo‘shilgan' });
+    const { rows } = await pool.query(
+      `UPDATE responsibles SET taqsimot_enabled = TRUE, taqsimot_pct = $2
+       WHERE id = $1 AND active = TRUE
+       RETURNING id, taqsimot_pct, taqsimot_enabled`,
+      [id, pct]
+    );
+    if (!rows.length) return res.status(404).json({ error: 'Active responsible not found' });
+    res.json({ ok: true, ...rows[0] });
+  } catch (err) {
+    console.error('[dashboard/taqsimot add]', err.message);
     res.status(500).json({ error: err.message });
   }
 });
@@ -1247,13 +1291,16 @@ router.put('/taqsimot/:id', async (req, res) => {
     return res.status(400).json({ error: 'Invalid id or taqsimot_pct (0–100)' });
   }
   try {
-    await pool.query(
-      `UPDATE responsibles SET taqsimot_pct = $1 WHERE id = $2`,
+    const { rowCount } = await pool.query(
+      `UPDATE responsibles SET taqsimot_pct = $1 WHERE id = $2
+       AND active = TRUE AND id IN (SELECT responsible_id FROM taqsimot_members)`,
       [pct, id]
     );
+    if (!rowCount) return res.status(404).json({ error: 'Mas’ul taqsimotda yo‘q' });
     const { rows } = await pool.query(
       `SELECT SUM(taqsimot_pct)::numeric AS total
-       FROM responsibles WHERE taqsimot_pct > 0 AND active = TRUE`
+       FROM responsibles WHERE taqsimot_pct > 0 AND active = TRUE
+         AND id IN (SELECT responsible_id FROM taqsimot_members)`
     );
     const total = parseFloat(rows[0].total || 0);
     res.json({
@@ -1294,6 +1341,7 @@ router.get('/taqsimot-stats', async (_req, res) => {
         AND l.date_create >= date_trunc('day', NOW() AT TIME ZONE 'Asia/Tashkent') AT TIME ZONE 'Asia/Tashkent'
         AND (l.source_id IS NULL OR l.source_id != 'UC_1WUFJB')
       WHERE r.taqsimot_pct > 0 AND r.active = TRUE
+        AND r.id IN (SELECT responsible_id FROM taqsimot_members)
       GROUP BY r.id, r.name, r.last_name, r.taqsimot_pct
       ORDER BY r.taqsimot_pct DESC
     `);

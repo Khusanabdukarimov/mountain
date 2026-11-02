@@ -194,6 +194,9 @@ def install_auth_middleware(app):
         "/api/openapi.json",
         "/api/docs",
         "/api/config",
+        # Expiry status: the frontend asks it before login to decide between the
+        # app and the "Subscription Expired" page (see core/subscription.py).
+        "/api/subscription",
         "/api/bitrix/",
         # Bitrix24 Business Process "call webhook" action posts here with no
         # way to attach our JWT — must stay public, like /api/dashboard/payments
