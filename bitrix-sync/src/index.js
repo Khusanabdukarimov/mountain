@@ -263,13 +263,13 @@ Promise.all([
       console.error('[facebook-leads] failed to schedule:', e.message);
     }
 
-    // Daily user sync (01:30 Tashkent) — mirrors the Bitrix user directory into
+    // User sync (every 10 min) — mirrors the Bitrix user directory into
     // `responsibles`. Every filter dropdown reads that table, so without this a
     // new hire is invisible in every section until someone re-runs initialSync
     // by hand. Also runs once ~60s after startup.
     try {
-      const { scheduleDailyUserSync } = require('./sync/syncResponsibles');
-      scheduleDailyUserSync();
+      const { scheduleUserSync } = require('./sync/syncResponsibles');
+      scheduleUserSync();
     } catch (e) {
       console.error('[sync-responsibles] failed to schedule:', e.message);
     }

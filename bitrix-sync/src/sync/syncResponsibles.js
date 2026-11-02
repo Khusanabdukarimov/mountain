@@ -45,32 +45,22 @@ async function syncResponsibles() {
     if (!before.has(String(id))) added.push(`${id} ${`${u.NAME || ''} ${u.LAST_NAME || ''}`.trim()}`);
   }
 
-  console.log(`[sync-responsibles] ${users.length} Bitrix users upserted`
-    + (added.length ? `; NEW: ${added.join(', ')}` : '; no new staff'));
+  // Every 10 min now — only log when the roster actually grew.
+  if (added.length) console.log(`[sync-responsibles] ${users.length} Bitrix users upserted; NEW: ${added.join(', ')}`);
   return users.length;
 }
 
-// ms until the next 01:30 Asia/Tashkent (UTC+5, no DST). Offset from the 01:00
-// lead reconcile so the two jobs don't hit Bitrix at the same moment.
-function msUntilNext0130() {
-  const nowShifted = new Date(Date.now() + 5 * 3600 * 1000);
-  const next = new Date(nowShifted);
-  next.setUTCHours(1, 30, 0, 0);
-  if (next <= nowShifted) next.setUTCDate(next.getUTCDate() + 1);
-  return next.getTime() - nowShifted.getTime();
-}
+// The whole directory is one user.get page (~33 users), so polling is cheap.
+// It used to run once a day at 01:30, which left a new hire missing from every
+// dropdown until the next night.
+const USER_SYNC_INTERVAL_MS = 10 * 60 * 1000;
 
-function scheduleDailyUserSync() {
-  // Catch new staff shortly after a deploy without waiting for 01:30.
+function scheduleUserSync() {
+  // Catch new staff shortly after a deploy without waiting a full interval.
   setTimeout(() => { syncResponsibles().catch(() => {}); }, 60_000);
+  setInterval(() => syncResponsibles().catch(() => {}), USER_SYNC_INTERVAL_MS);
 
-  setTimeout(() => {
-    syncResponsibles().catch(() => {});
-    setInterval(() => syncResponsibles().catch(() => {}), 24 * 3600 * 1000);
-  }, msUntilNext0130());
-
-  console.log('[sync-responsibles] daily user sync scheduled at 01:30 Tashkent'
-    + ` (next in ${Math.round(msUntilNext0130() / 60000)} min)`);
+  console.log(`[sync-responsibles] user sync scheduled every ${USER_SYNC_INTERVAL_MS / 60000} min`);
 }
 
-module.exports = { syncResponsibles, scheduleDailyUserSync };
+module.exports = { syncResponsibles, scheduleUserSync };
