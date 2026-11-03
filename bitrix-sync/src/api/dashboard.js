@@ -3,7 +3,11 @@ const pool = require('../db/pool');
 const fs = require('fs');
 const path = require('path');
 
+const { departmentScope, deptCsv } = require('../services/salesDepartment');
+
 const router = Router();
+// ?dept=sotuv (sent by the Lidlar / Sdelkalar pages) limits everything below to the sales department
+router.use(departmentScope);
 
 // ── Mode-aware SQL helpers ─────────────────────────────────────────
 
@@ -338,10 +342,11 @@ router.get('/tasks-summary', async (req, res) => {
          AND ($2::date IS NULL OR t.date_created < $2::date + INTERVAL '1 day')
          ${leadFilter}
        WHERE r.active = TRUE
+         AND ($3::text IS NULL OR r.id::text = ANY(string_to_array($3, ',')))
        GROUP BY r.id, r.name, r.last_name
        HAVING COUNT(t.id) > 0
        ORDER BY total DESC`,
-      params
+      [...params, deptCsv(req)]
     );
     res.json({ tasks: rows });
   } catch (err) {
@@ -418,7 +423,7 @@ router.get('/deal-cancel-reasons', async (req, res) => {
   const params = [
     from || null,
     to || null,
-    responsible_id ? parseInt(responsible_id) : null,
+    responsible_id || null,
   ];
   try {
     const { rows } = await pool.query(
@@ -430,7 +435,7 @@ router.get('/deal-cancel-reasons', async (req, res) => {
        WHERE d.category_id = 0
          AND ($1::date IS NULL OR d.date_create::date >= $1::date)
          AND ($2::date IS NULL OR d.date_create::date <= $2::date)
-         AND ($3::int  IS NULL OR d.responsible_id = $3::int)
+         AND ($3::text IS NULL OR d.responsible_id::text = ANY(string_to_array($3, ',')))
          AND (d.source_id IS NULL OR d.source_id NOT ILIKE '%amocrm%')
        GROUP BY d.uf_cancel_reason
        ORDER BY total DESC`,
@@ -452,7 +457,9 @@ router.get('/deal-filter-options', async (req, res) => {
   try {
     const [respRes, stageRes, srcRes] = await Promise.all([
       pool.query(`SELECT id, TRIM(COALESCE(name,'') || ' ' || COALESCE(last_name,'')) AS full_name
-                  FROM responsibles WHERE active = true ORDER BY name`),
+                  FROM responsibles WHERE active = true
+                    AND ($1::text IS NULL OR id::text = ANY(string_to_array($1, ',')))
+                  ORDER BY name`, [deptCsv(req)]),
       pool.query(`SELECT DISTINCT s.id, s.name FROM stages s
                   INNER JOIN deals d ON d.stage_id = s.id
                   WHERE d.category_id = 0
@@ -1033,9 +1040,10 @@ router.get('/lead-responsibles', async (req, res) => {
        FROM responsibles r
        LEFT JOIN fl ON fl.responsible_id = r.id
        WHERE r.active = TRUE
+         AND ($6::text IS NULL OR r.id::text = ANY(string_to_array($6, ',')))
        GROUP BY r.id, r.name, r.last_name, r.work_position
        ORDER BY total DESC`,
-      params
+      [...params, deptCsv(req)]
     );
     res.json({ responsibles: rows });
   } catch (err) {
@@ -1137,6 +1145,12 @@ router.get('/lead-conversion', async (req, res) => {
   const { from, to, responsible_id, stage, source, mode, dimension } = req.query;
   const dim = LEAD_CONV_DIMS[dimension] || LEAD_CONV_DIMS.manager;
   const params = [from || null, to || null, responsible_id || null, stage || null, source || null];
+  let dimSelect = dim.select;
+  if (dim === LEAD_CONV_DIMS.manager && req.deptIds) {
+    // the manager rows come from `responsibles`, so the department must limit that list too
+    dimSelect = dimSelect.replace('WHERE r.active = TRUE', `WHERE r.active = TRUE AND r.id::text = ANY(string_to_array($6, ','))`);
+    params.push(deptCsv(req));
+  }
 
   try {
     const { rows } = await pool.query(
@@ -1152,7 +1166,7 @@ router.get('/lead-conversion', async (req, res) => {
            AND ${leadSrcCond(mode, 5)}
            ${leadModeClause(mode)}
        )
-       ${dim.select}
+       ${dimSelect}
        ORDER BY total DESC`,
       params
     );
@@ -1184,7 +1198,10 @@ router.get('/lead-filter-options', async (req, res) => {
     const [respRes, stageRes, srcRes, formRes] = await Promise.all([
       pool.query(
         `SELECT id, TRIM(COALESCE(name,'') || ' ' || COALESCE(last_name,'')) AS full_name
-         FROM responsibles WHERE active = TRUE ORDER BY name`
+         FROM responsibles WHERE active = TRUE
+           AND ($1::text IS NULL OR id::text = ANY(string_to_array($1, ',')))
+         ORDER BY name`,
+        [deptCsv(req)]
       ),
       pool.query(
         `SELECT bitrix_id, name FROM stages
@@ -1381,9 +1398,10 @@ router.get('/utm-campaign-stats', async (req, res) => {
          AND ($3::text IS NULL OR TRIM(l.utm_source) = $3)
          AND ($4::text IS NULL OR COALESCE(NULLIF(TRIM(l.utm_medium),''),'Nomalum') = $4)
          ${leadModeClause(mode)}
+         AND ($5::text IS NULL OR l.responsible_id::text = ANY(string_to_array($5, ',')))
        GROUP BY COALESCE(NULLIF(l.utm_campaign, ''), 'Nomalum')
        ORDER BY umumiy_lidlar DESC`,
-      [from || null, to || null, utm_source || null, utm_medium || null],
+      [from || null, to || null, utm_source || null, utm_medium || null, deptCsv(req)],
     );
     res.json(rows);
   } catch (err) {
@@ -1418,9 +1436,10 @@ router.get('/utm-medium-stats', async (req, res) => {
          AND ($2::date IS NULL OR l.date_create::date <= $2::date)
          AND TRIM(l.utm_source) = $3
          ${leadModeClause(mode)}
+         AND ($4::text IS NULL OR l.responsible_id::text = ANY(string_to_array($4, ',')))
        GROUP BY COALESCE(NULLIF(TRIM(l.utm_medium), ''), 'Nomalum')
        ORDER BY umumiy_lidlar DESC`,
-      [from || null, to || null, utm_source],
+      [from || null, to || null, utm_source, deptCsv(req)],
     );
     res.json(rows);
   } catch (err) {
@@ -1461,9 +1480,10 @@ router.get('/utm-content-stats', async (req, res) => {
            OR ($5 != 'Nomalum' AND l.utm_campaign = $5)
          )
          ${leadModeClause(mode)}
+         AND ($6::text IS NULL OR l.responsible_id::text = ANY(string_to_array($6, ',')))
        GROUP BY COALESCE(NULLIF(TRIM(l.utm_content), ''), 'Nomalum')
        ORDER BY umumiy_lidlar DESC`,
-      [from || null, to || null, utm_source || null, utm_medium || null, utm_campaign || null],
+      [from || null, to || null, utm_source || null, utm_medium || null, utm_campaign || null, deptCsv(req)],
     );
     res.json(rows);
   } catch (err) {
@@ -1509,9 +1529,10 @@ router.get('/utm-term-stats', async (req, res) => {
            OR ($6 != 'Nomalum' AND l.utm_content = $6)
          )
          ${leadModeClause(mode)}
+         AND ($7::text IS NULL OR l.responsible_id::text = ANY(string_to_array($7, ',')))
        GROUP BY COALESCE(NULLIF(TRIM(l.utm_term), ''), 'Nomalum')
        ORDER BY umumiy_lidlar DESC`,
-      [from || null, to || null, utm_source || null, utm_medium || null, utm_campaign || null, utm_content || null],
+      [from || null, to || null, utm_source || null, utm_medium || null, utm_campaign || null, utm_content || null, deptCsv(req)],
     );
     res.json(rows);
   } catch (err) {
@@ -1564,9 +1585,10 @@ router.get('/utm-responsible-stats', async (req, res) => {
            OR ($7 != 'Nomalum' AND l.utm_term = $7)
          )
          ${leadModeClause(mode)}
+         AND ($8::text IS NULL OR l.responsible_id::text = ANY(string_to_array($8, ',')))
        GROUP BY l.responsible_id, r.name, r.last_name
        ORDER BY umumiy_lidlar DESC`,
-      [from || null, to || null, utm_source || null, utm_campaign || null, utm_medium || null, utm_content || null, utm_term || null],
+      [from || null, to || null, utm_source || null, utm_campaign || null, utm_medium || null, utm_content || null, utm_term || null, deptCsv(req)],
     );
     res.json(rows);
   } catch (err) {
@@ -1613,9 +1635,10 @@ router.get('/utm-stats', async (req, res) => {
                   )
               ))
          ${leadModeClause(mode)}
+         AND ($4::text IS NULL OR l.responsible_id::text = ANY(string_to_array($4, ',')))
        GROUP BY TRIM(l.utm_source)
        ORDER BY umumiy_lidlar DESC`,
-      [from || null, to || null, form_id || null],
+      [from || null, to || null, form_id || null, deptCsv(req)],
     );
     res.json(rows);
   } catch (err) {
@@ -1821,7 +1844,7 @@ router.get('/responsible-leads', async (req, res) => {
     return res.status(400).json({ error: 'key (or responsible_id) required' });
   }
 
-  const params = [groupKey, from || null, to || null];
+  const params = [groupKey, from || null, to || null, deptCsv(req)];
 
   try {
     const { rows } = await pool.query(
@@ -1853,6 +1876,7 @@ router.get('/responsible-leads', async (req, res) => {
        WHERE ${dim.leadWhere(1)}
          AND ($2::date IS NULL OR l.date_create::date >= $2::date)
          AND ($3::date IS NULL OR l.date_create::date <= $3::date)
+         AND ($4::text IS NULL OR l.responsible_id::text = ANY(string_to_array($4, ',')))
          ${mode === 'amocrm' ? `AND l.source_id = 'UC_1WUFJB'` : ``}
        ORDER BY l.date_create DESC
        LIMIT 1000`,

@@ -26,6 +26,18 @@ function handle401() {
 export const API_URL_CRM = import.meta.env.VITE_API_URL_CRM || "";
 export const API_URL_PAYROLL = import.meta.env.VITE_API_URL_PAYROLL || "";
 
+// The Lidlar and Sdelkalar pages show only the sales department's data (SOTUV BO'LIMI): while
+// one of them is open, every /api/dashboard request carries ?dept=sotuv and the server limits
+// the leads / deals / "Mas'ul" filter to that department's members (bitrix-sync
+// services/salesDepartment.js). Other pages that call the same endpoints are not affected.
+const DEPT_SCOPE_PAGES = ['/lidlar', '/sdelkalar', '/marketing/lidlar', '/marketing/sdelkalar'];
+
+function inDeptScope(path: string): boolean {
+  if (typeof window === 'undefined' || !path.startsWith('/api/dashboard/')) return false;
+  const here = window.location.pathname.replace(/\/+$/, '');
+  return DEPT_SCOPE_PAGES.some(p => here === p || here.startsWith(p + '/'));
+}
+
 export async function apiGet<T>(
   path: string, 
   params?: Record<string, string | number | undefined | null>,
@@ -34,6 +46,7 @@ export async function apiGet<T>(
   // If baseUrl is empty, it relies on Vite proxy or same-domain
   const base = baseUrl || window.location.origin;
   const url = new URL(path, base);
+  if (inDeptScope(path)) url.searchParams.set('dept', 'sotuv');
   
   if (params) {
     for (const [k, v] of Object.entries(params)) {

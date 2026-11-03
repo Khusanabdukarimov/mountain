@@ -78,6 +78,7 @@ app.get('/health', async (req, res) => {
 // Run all migrations before accepting connections
 Promise.all([
   ensureSubscriptionTable().catch(err => console.error('[startup] app_subscription migration failed:', err.message)),
+  require('./services/salesDepartment').ensureTable().catch(err => console.error('[startup] sales_department_members migration failed:', err.message)),
   pool.query(`
     ALTER TABLE responsibles ADD COLUMN IF NOT EXISTS taqsimot_enabled BOOLEAN;
     UPDATE responsibles
