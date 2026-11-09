@@ -834,6 +834,14 @@ function SummaryRow({ employees, subperiods, summary }: SummaryRowProps) {
 
   const CARD = { background: 'var(--bg)', border: '1px solid var(--border)', borderRadius: 14, overflow: 'hidden' };
 
+  // Chempionlar: top 5 by default, everyone with a plan when expanded.
+  const CHAMPIONS_TOP = 5;
+  const [showAllChampions, setShowAllChampions] = useState(false);
+  const champions = employees
+    .filter(e => e.target > 0)
+    .sort((a, b) => b.total_actual - a.total_actual);
+  const hiddenChampions = Math.max(champions.length - CHAMPIONS_TOP, 0);
+
   return (
     <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
 
@@ -1029,19 +1037,17 @@ function SummaryRow({ employees, subperiods, summary }: SummaryRowProps) {
         })()}
       </div>
 
-      {/* 2 ── Chempionlar: every employee with a plan ─────────────── */}
+      {/* 2 ── Chempionlar: top 5, expandable to everyone with a plan ── */}
       <div style={{ ...CARD, display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>
           Chempionlar
         </div>
-        {/* The absolute scroller keeps a long list from stretching the row:
-            the card stays as tall as its neighbours and the list scrolls. */}
+        {/* The absolute scroller keeps the expanded list from stretching the
+            row: the card stays as tall as its neighbours and the list scrolls. */}
         <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
         <div style={{ position: 'absolute', inset: 0, overflowY: 'auto' }}>
         <div style={{ minHeight: '100%', boxSizing: 'border-box', padding: '12px 20px', display: 'flex', flexDirection: 'column', justifyContent: 'space-evenly', gap: 14 }}>
-          {employees
-            .filter(e => e.target > 0)
-            .sort((a, b) => b.total_actual - a.total_actual)
+          {(showAllChampions ? champions : champions.slice(0, CHAMPIONS_TOP))
             .map((emp, i) => {
               const barColor = emp.pct >= 100 ? '#16a34a' : emp.pct >= 70 ? '#f59e0b' : '#ef4444';
               return (
@@ -1068,6 +1074,14 @@ function SummaryRow({ employees, subperiods, summary }: SummaryRowProps) {
         </div>
         </div>
         </div>
+        {hiddenChampions > 0 && (
+          <button
+            onClick={() => setShowAllChampions(v => !v)}
+            style={{ padding: '10px 20px', background: 'transparent', border: 'none', borderTop: '1px solid var(--border)', color: 'var(--text3)', fontSize: 12, fontWeight: 600, cursor: 'pointer' }}
+          >
+            {showAllChampions ? "Yig'ish ▲" : `Barchasini ko'rsatish (+${hiddenChampions}) ▼`}
+          </button>
+        )}
       </div>
 
       {/* 3 ── Rejani bajarilish dinamikasi ─────────────────────── */}
