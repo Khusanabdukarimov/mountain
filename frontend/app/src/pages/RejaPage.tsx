@@ -1029,16 +1029,19 @@ function SummaryRow({ employees, subperiods, summary }: SummaryRowProps) {
         })()}
       </div>
 
-      {/* 2 ── Top 5 xodimlar ───────────────────────────────────── */}
+      {/* 2 ── Chempionlar: every employee with a plan ─────────────── */}
       <div style={{ ...CARD, display: 'flex', flexDirection: 'column' }}>
         <div style={{ padding: '14px 20px', borderBottom: '1px solid var(--border)', fontSize: 14, fontWeight: 700, color: 'var(--text)' }}>
           Chempionlar
         </div>
-        <div style={{ flex: 1, padding: '12px 20px', display: 'flex', flexDirection: 'column', justifyContent: 'space-evenly' }}>
+        {/* The absolute scroller keeps a long list from stretching the row:
+            the card stays as tall as its neighbours and the list scrolls. */}
+        <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
+        <div style={{ position: 'absolute', inset: 0, overflowY: 'auto' }}>
+        <div style={{ minHeight: '100%', boxSizing: 'border-box', padding: '12px 20px', display: 'flex', flexDirection: 'column', justifyContent: 'space-evenly', gap: 14 }}>
           {employees
             .filter(e => e.target > 0)
             .sort((a, b) => b.total_actual - a.total_actual)
-            .slice(0, 5)
             .map((emp, i) => {
               const barColor = emp.pct >= 100 ? '#16a34a' : emp.pct >= 70 ? '#f59e0b' : '#ef4444';
               return (
@@ -1062,6 +1065,8 @@ function SummaryRow({ employees, subperiods, summary }: SummaryRowProps) {
                 </div>
               );
             })}
+        </div>
+        </div>
         </div>
       </div>
 

@@ -32,6 +32,7 @@
  *   node scripts/backfill_lead_utm_from_facebook.js --dry      # report only, no writes
  *   node scripts/backfill_lead_utm_from_facebook.js            # apply
  *   options: --since=YYYY-MM-DD (default 2026-09-01)
+ *            --title=<text>     only leads whose title contains the text (e.g. one form's name)
  */
 
 require('dotenv').config();
@@ -40,6 +41,7 @@ const { fetchOne, bitrixPost } = require('../src/services/bitrix');
 
 const DRY = process.argv.includes('--dry');
 const SINCE = (process.argv.find(a => a.startsWith('--since=')) || '').slice(8) || '2026-09-01';
+const TITLE = (process.argv.find(a => a.startsWith('--title=')) || '').slice(8) || null;
 const WINDOW_SEC = 600;
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
@@ -55,10 +57,12 @@ const empty = v => v == null || String(v).trim() === '';
     JOIN facebook_leads fl ON fl.phone_norm = lp.phone_norm AND fl.campaign_name IS NOT NULL
      AND ABS(EXTRACT(EPOCH FROM (fl.created_time - l.date_create))) <= $2
     WHERE l.source_id = 'UC_89FPH6' AND COALESCE(l.utm_campaign, '') = '' AND l.date_create >= $1::timestamp
-    ORDER BY l.id, gap`, [SINCE, WINDOW_SEC]);
+      AND ($3::text IS NULL OR l.title ILIKE '%' || $3 || '%')
+    ORDER BY l.id, gap`, [SINCE, WINDOW_SEC, TITLE]);
 
   const { rows: allEmpty } = await pool.query(
-    `SELECT count(*)::int AS n FROM leads WHERE source_id = 'UC_89FPH6' AND COALESCE(utm_campaign, '') = '' AND date_create >= $1::timestamp`, [SINCE]);
+    `SELECT count(*)::int AS n FROM leads WHERE source_id = 'UC_89FPH6' AND COALESCE(utm_campaign, '') = '' AND date_create >= $1::timestamp
+        AND ($2::text IS NULL OR title ILIKE '%' || $2 || '%')`, [SINCE, TITLE]);
   const { rows: active } = await pool.query('SELECT campaign_name FROM taqsimot_campaign_settings WHERE active = TRUE');
   const activeNames = new Set(active.map(r => r.campaign_name));
 
@@ -69,7 +73,7 @@ const empty = v => v == null || String(v).trim() === '';
   }
 
   const stats = { emptyLeads: allEmpty[0].n, noMatch: allEmpty[0].n - byLead.size, ambiguous: 0, alreadyFilled: 0, updated: 0, failed: 0 };
-  console.log(`[utm-backfill] ${DRY ? 'DRY RUN — ' : ''}${stats.emptyLeads} empty-UTM Target leads since ${SINCE}; `
+  console.log(`[utm-backfill] ${DRY ? 'DRY RUN — ' : ''}${stats.emptyLeads} empty-UTM Target leads since ${SINCE}${TITLE ? ` with "${TITLE}" in the title` : ''}; `
     + `${byLead.size} have a same-phone Meta submission within ${WINDOW_SEC / 60} min, ${stats.noMatch} have none`);
 
   for (const [id, subs] of byLead) {
