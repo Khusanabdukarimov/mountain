@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 const { departmentScope, deptCsv } = require('../services/salesDepartment');
+const { getContacts } = require('../services/dealContacts');
 
 const router = Router();
 // ?dept=sotuv (sent by the Lidlar / Sdelkalar pages) limits everything below to the sales department
@@ -644,7 +645,8 @@ router.get('/deals-list', async (req, res) => {
       `SELECT
          d.id,
          TRIM(COALESCE(r.name,'') || ' ' || COALESCE(r.last_name,'')) AS responsible,
-         COALESCE(ph.phone, '—')    AS mijoz,
+         d.contact_id,
+         COALESCE(ph.phone, '')     AS phone,
          d.opportunity::numeric     AS summa,
          COALESCE(d.source_id, '—') AS manba,
          d.date_create              AS sana,
@@ -671,20 +673,28 @@ router.get('/deals-list', async (req, res) => {
       baseParams
     );
 
+    // Customer name + phone come from the deal's Bitrix contact (deal_phones is empty for every
+    // deal since 26 June); the deal's own phone row is only the fallback.
+    const contacts = await getContacts(rows.map(r => r.contact_id));
     const items = [];
     for (const row of rows) {
+      const contact = contacts.get(Number(row.contact_id)) || { name: '', phone: '' };
+      const phone = contact.phone || row.phone || '';
       let resolvedManba = row.manba;
-      if (mode === 'amocrm' && row.mijoz && row.mijoz !== '—') {
+      if (mode === 'amocrm' && row.phone) {
         const { rows: filialRes } = await pool.query(`
           SELECT l.uf_filial FROM lead_phones lp
           JOIN leads l ON l.id = lp.lead_id
           WHERE lp.phone = $1 AND l.uf_filial IS NOT NULL AND l.uf_filial != ''
           LIMIT 1
-        `, [row.mijoz]);
+        `, [row.phone]);
         resolvedManba = filialRes.length ? filialRes[0].uf_filial : 'Boshqalar';
       }
+      const { contact_id, phone: _dealPhone, ...rest } = row;
       items.push({
-        ...row,
+        ...rest,
+        mijoz: contact.name || phone || '—',
+        telefon: phone || '—',
         manba: SOURCE_NAMES[resolvedManba] || resolvedManba || '—',
       });
     }

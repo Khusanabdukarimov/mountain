@@ -76,7 +76,10 @@ export type DealFilterOptions = {
 export type DealRow = {
   id: number;
   responsible: string;
+  /** The deal's contact name (falls back to the phone, then "—"). */
   mijoz: string;
+  /** The deal's contact phone number, "—" when it has none. */
+  telefon: string;
   summa: number;
   manba: string;
   sana: string;

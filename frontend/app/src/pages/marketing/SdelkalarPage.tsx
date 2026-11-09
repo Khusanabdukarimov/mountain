@@ -233,7 +233,7 @@ function OperatorDealsDropdown({
         <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
           <thead>
             <tr style={{ background: "var(--bg3)", position: "sticky", top: 0 }}>
-              {["#", "Mijoz", "Summa", "Manba", "Bosqich", "Sana"].map(h => (
+              {["#", "Mijoz", "Telefon", "Summa", "Manba", "Bosqich", "Sana"].map(h => (
                 <th key={h} style={{ padding: "6px 12px", textAlign: "left", fontWeight: 600, color: "var(--text3)", fontSize: 11, borderBottom: "1px solid var(--border)" }}>{h}</th>
               ))}
             </tr>
@@ -249,6 +249,7 @@ function OperatorDealsDropdown({
                   </a>
                 </td>
                 <td style={{ padding: "5px 12px", color: "var(--text)", maxWidth: 180, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.mijoz || "—"}</td>
+                <td style={{ padding: "5px 12px", color: "var(--text2)", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{d.telefon || "—"}</td>
                 <td style={{ padding: "5px 12px", color: "#00BCD4", fontWeight: 600 }}>{d.summa ? `$${fmtNum(d.summa)}` : "—"}</td>
                 <td style={{ padding: "5px 12px", color: "var(--text3)" }}>{d.manba || "—"}</td>
                 <td style={{ padding: "5px 12px" }}>
@@ -291,7 +292,7 @@ function DealsInlinePanel({
         <table style={{ width: "100%", fontSize: 12, borderCollapse: "collapse" }}>
           <thead>
             <tr style={{ background: "var(--bg3)", position: "sticky", top: 0 }}>
-              {["#", "Mijoz", "Mas'ul", "Summa", "Manba", "Bosqich", "Sana"].map(h => (
+              {["#", "Mijoz", "Telefon", "Mas'ul", "Summa", "Manba", "Bosqich", "Sana"].map(h => (
                 <th key={h} style={{ padding: "5px 10px", textAlign: "left", fontWeight: 600, color: "var(--text3)", fontSize: 11, borderBottom: "1px solid var(--border)" }}>{h}</th>
               ))}
             </tr>
@@ -307,6 +308,7 @@ function DealsInlinePanel({
                   </a>
                 </td>
                 <td style={{ padding: "5px 10px", color: "var(--text)", maxWidth: 160, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.mijoz || "—"}</td>
+                <td style={{ padding: "5px 10px", color: "var(--text2)", whiteSpace: "nowrap", fontVariantNumeric: "tabular-nums" }}>{d.telefon || "—"}</td>
                 <td style={{ padding: "5px 10px", color: "var(--text2)", maxWidth: 130, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{d.responsible || "—"}</td>
                 <td style={{ padding: "5px 10px", color: "#00BCD4", fontWeight: 600 }}>{d.summa ? `$${fmtNum(d.summa)}` : "—"}</td>
                 <td style={{ padding: "5px 10px", color: "var(--text3)" }}>{d.manba || "—"}</td>
